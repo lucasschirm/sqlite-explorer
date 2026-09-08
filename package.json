@@ -9,14 +9,18 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "demo:db": "bun scripts/make-demo-db.js",
+    "wal:db": "bun scripts/make-wal-test-db.js",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.10",
+    "monaco-editor": "^0.56.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "sql.js": "^1.14.2"
+    "sql-formatter": "^15.8.2",
+    "sql.js": "^1.14.2",
+    "wa-sqlite": "^1.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

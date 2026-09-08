@@ -16,6 +16,24 @@ html, body, #root {
   animation: toast-enter-anim 0.25s ease-out;
 }
 
+@keyframes drawer-backdrop-anim {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes drawer-panel-anim {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+.drawer-backdrop {
+  animation: drawer-backdrop-anim 0.2s ease-out;
+}
+
+.drawer-panel {
+  animation: drawer-panel-anim 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 * {
   box-sizing: border-box;
 }

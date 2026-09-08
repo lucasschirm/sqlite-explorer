@@ -24,7 +24,6 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: TabBarPro
     switch (type) {
       case "data": return "📊";
       case "structure": return "🏗️";
-      case "record": return "📄";
     }
   };
 

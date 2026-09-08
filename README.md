@@ -1,18 +1,19 @@
 # SQLite Viewer
 
-A fully offline, browser-based SQLite database viewer. Drop a `.sqlite`/`.db` file and browse tables, run custom SQL, inspect schema, and view individual records — everything runs in-memory, nothing is uploaded.
+A fully offline, browser-based SQLite database viewer. Drop a `.sqlite`/`.db` file and browse tables, run custom SQL, inspect schema, and view individual records — nothing is uploaded.
 
-Built with React + Vite + Tailwind CSS + sql.js (WebAssembly SQLite) + @tanstack/react-virtual.
+Built with React + Vite + Tailwind CSS + wa-sqlite (WebAssembly SQLite) + @tanstack/react-virtual.
 
 ## Features
 
 - **Drop anywhere** — drag a SQLite file onto the window, or click to browse
+- **Multi-gigabyte files** — databases of any size open instantly; pages stream from disk on demand and the whole file is never loaded into memory
 - **Demo database** — "Load demo database" button loads a bundled sample DB (3 tables with customers, products, orders)
 - **Tables sidebar** — row counts per table, click to open a Data tab, hover for the Structure shortcut
-- **Data tab** — editable SQL editor (defaults to `SELECT * FROM <table> LIMIT 100`), Run button or Ctrl/Cmd+Enter, virtualized read-only grid
+- **Data tab** — Monaco SQL editor (defaults to `SELECT * FROM <table> LIMIT 100`) with schema-aware autocomplete (tables, `table.` → columns), SQL formatting (button or Shift+Alt+F), Run button or Ctrl/Cmd+Enter, virtualized read-only grid
 - **Structure tab** — columns grid (name, type, notnull, default, pk) and indexes grid (name, unique, origin, columns)
 - **Record tab** — double-click any row to open a form view with type-aware read-only fields
-- **Feedback everywhere** — progress bar for large file reads, busy overlays for actions, toast notifications, `console.error` for failures
+- **Feedback everywhere** — busy overlays for actions, toast notifications, `console.error` for failures
 
 ## Development
 
@@ -53,5 +54,7 @@ GitHub Pages serves projects under `/<repo-name>/`. The deploy workflow handles 
 
 ## Notes
 
-- **Large files**: sql.js parses the whole database into browser memory. Files around 1–2 GB may exceed browser memory limits — the app validates the SQLite header up front and surfaces a clear error if parsing fails, but the practical limit depends on the browser/tab.
+- **Architecture**: the SQLite engine (wa-sqlite) runs in a Web Worker. The dropped/picked `File` is handed to the worker as a `Blob` reference (structured clone, zero copy), and a custom VFS (`src/lib/blobVfs.ts`) serves SQLite's page reads straight from that blob using synchronous `FileReaderSync` reads. Queries therefore touch only the 4 KiB pages they need — a 2.5 GB database opens in well under a second and uses a few MB of memory. The UI thread never blocks, since all SQLite work happens in the worker.
+- **WAL-mode databases**: databases in WAL journal mode normally require `-wal` and `-shm` side files, which a single dropped/picked file cannot provide. The VFS transparently presents them as legacy-mode read-only snapshots (showing the last checkpointed state), so they open like any other file. Generate a WAL test file with `bun run wal:db`.
 - **No uploads**: the file never leaves your machine; all parsing happens in the browser via WebAssembly.
+- **Monaco editor**: loaded lazily in its own chunk only after a database is open, with a minimal import set (editor core + SQL grammar — measured 695 KB vs 1.17 MB gzipped for the full `editor.main`) and a locally bundled web worker, keeping the app fully offline.

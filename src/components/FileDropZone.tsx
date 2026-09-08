@@ -11,10 +11,36 @@ export function FileDropZone({ onPickFile, onDemo, isLoading }: FileDropZoneProp
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragDepth = useRef(0);
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
+    // Stop the event from reaching App's window-level drop listener, which
+    // would otherwise start a second concurrent read of the same file.
+    e.stopPropagation();
     dragDepth.current = 0;
     setIsDragOver(false);
+
+    // Prefer the File System Access API (getAsFileSystemHandle) which gives
+    // a real disk handle — this bypasses sandboxed FileReader limitations
+    // that block reading large dropped files in Chromium.
+    const item = e.dataTransfer.items?.[0] as
+      | (DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemFileHandle | null> })
+      | undefined;
+    if (item?.getAsFileSystemHandle) {
+      try {
+        const handle = await item.getAsFileSystemHandle();
+        if (handle && "getFile" in handle) {
+          const file = await handle.getFile();
+          if (file) {
+            onPickFile(file);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn("getAsFileSystemHandle failed, falling back to DataTransfer.files:", err);
+      }
+    }
+
+    // Fallback: plain DataTransfer.files (may fail for very large files)
     const file = e.dataTransfer.files?.[0];
     if (file) onPickFile(file);
   };
@@ -87,6 +113,10 @@ export function FileDropZone({ onPickFile, onDemo, isLoading }: FileDropZoneProp
             <p className="text-xs text-gray-300">
               Supports .sqlite, .db, .sqlite3 files — files are processed
               locally and never uploaded
+            </p>
+            <p className="text-xs text-emerald-500/80 mt-2">
+              Multi-gigabyte files welcome — data streams from disk on demand,
+              the whole file is never loaded into memory
             </p>
           </>
         )}
