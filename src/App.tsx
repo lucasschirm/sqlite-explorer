@@ -20,10 +20,49 @@ import { buildSchemaCatalog, setSchemaCatalog } from "./lib/sqlCompletions";
 import { initWebMcpTools, setWebMcpController, buildPagedQuery } from "./lib/webmcp";
 import { aiClient } from "./lib/aiClient";
 import { AiStatusPill } from "./components/AiStatusPill";
+import { DocsPage } from "./components/DocsPage";
+import { AboutPage } from "./components/AboutPage";
+import { assetUrl } from "./lib/assetUrl";
 
 let tabIdCounter = 0;
 function nextTabId() {
   return `tab-${++tabIdCounter}`;
+}
+
+// Minimal hash routing: "" (app), "#/docs" (documentation), "#/about".
+// Docs anchors look like "#/docs?structure-tab" — hashchange re-scrolls.
+type Route = { page: "app" | "docs" | "about"; anchor: string | null };
+function parseHash(): Route {
+  const hash = window.location.hash;
+  if (hash.startsWith("#/docs")) {
+    const anchor = hash.startsWith("#/docs?") ? hash.slice("#/docs?".length) : null;
+    return { page: "docs", anchor };
+  }
+  if (hash.startsWith("#/about")) return { page: "about", anchor: null };
+  return { page: "app", anchor: null };
+}
+
+function useHashRoute(): Route {
+  const [route, setRoute] = useState<Route>(() => parseHash());
+  useEffect(() => {
+    const onHashChange = () => {
+      setRoute(parseHash());
+      const { page, anchor } = parseHash();
+      if (page === "docs" && anchor) {
+        // scrollIntoView walks up to the nearest scrollable ancestor (the
+        // page's main container — the window itself is overflow:hidden).
+        requestAnimationFrame(() => {
+          document.getElementById(anchor)?.scrollIntoView({ block: "start" });
+        });
+      } else {
+        document.getElementById("page-scroll")?.scrollTo({ top: 0 });
+        window.scrollTo(0, 0);
+      }
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+  return route;
 }
 
 let sqlTabCounter = 0;
@@ -50,7 +89,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-function App() {
+function DatabaseApp() {
   const { showToast } = useToast();
 
   // Synchronous re-entry guard (state updates are async, so two drops in the
@@ -534,7 +573,11 @@ function App() {
       <div className="h-screen w-screen flex flex-col bg-gray-50">
         <header className="px-6 py-3 bg-gray-900 text-white flex items-center gap-3 shrink-0">
           <span className="text-lg">🗄️</span>
-          <h1 className="text-sm font-semibold">SQLite Viewer</h1>
+          <h1 className="text-sm font-semibold">SQLite Explorer</h1>
+          <nav className="ml-auto flex items-center gap-4 text-xs">
+            <a href="#/docs" className="text-gray-300 hover:text-white transition-colors">Docs</a>
+            <a href="#/about" className="text-gray-300 hover:text-white transition-colors">About</a>
+          </nav>
         </header>
         <FileDropZone onPickFile={handleFilePicked} isLoading={busy != null} onDemo={handleLoadDemo} />
         <LoadingOverlay
@@ -551,8 +594,12 @@ function App() {
     <div className="h-screen w-screen flex flex-col bg-white">
       <header className="px-4 py-2 bg-gray-900 text-white flex items-center gap-3 shrink-0">
         <span className="text-lg">🗄️</span>
-        <h1 className="text-sm font-semibold">SQLite Viewer</h1>
+        <h1 className="text-sm font-semibold">SQLite Explorer</h1>
         <AiStatusPill />
+        <nav className="flex items-center gap-4 text-xs">
+          <a href="#/docs" className="text-gray-300 hover:text-white transition-colors">Docs</a>
+          <a href="#/about" className="text-gray-300 hover:text-white transition-colors">About</a>
+        </nav>
         {filename && (
           <>
             <span className="text-gray-500 text-xs">—</span>
@@ -627,12 +674,52 @@ function App() {
   );
 }
 
-const assetUrl = (name: string) => `${(import.meta.env.BASE_URL ?? "/").replace(/\/?$/, "/")}${name}`;
+
 
 export default function WrappedApp() {
+  const route = useHashRoute();
+
+  if (route.page === "docs" || route.page === "about") {
+    return (
+      <div className="h-screen flex flex-col bg-white">
+        <header className="px-6 py-3 bg-gray-900 text-white flex items-center gap-3 shrink-0 z-10">
+          <a
+            href="#/"
+            className="flex items-center gap-3 text-white hover:opacity-90 transition-opacity"
+          >
+            <span className="text-lg">🗄️</span>
+            <h1 className="text-sm font-semibold">SQLite Explorer</h1>
+          </a>
+          <nav className="ml-auto flex items-center gap-4 text-xs">
+            <a
+              href="#/docs"
+              className={`transition-colors ${route.page === "docs" ? "text-white font-semibold" : "text-gray-300 hover:text-white"}`}
+            >
+              Docs
+            </a>
+            <a
+              href="#/about"
+              className={`transition-colors ${route.page === "about" ? "text-white font-semibold" : "text-gray-300 hover:text-white"}`}
+            >
+              About
+            </a>
+            <a
+              href="#/"
+              className="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded transition-colors"
+            >
+              ← Back to app
+            </a>
+          </nav>
+        </header>
+        <main id="page-scroll" className="flex-1 overflow-y-auto min-h-0">
+          {route.page === "docs" ? <DocsPage /> : <AboutPage />}
+        </main>
+      </div>
+    );
+  }
   return (
     <ToastProvider>
-      <App />
+      <DatabaseApp />
     </ToastProvider>
   );
 }

@@ -1,6 +1,6 @@
-# SQLite Viewer
+# SQLite Explorer
 
-A fully offline, browser-based SQLite database viewer. Drop a `.sqlite`/`.db` file and browse tables, run custom SQL, inspect schema, and view individual records — nothing is uploaded.
+A fully offline, browser-based SQLite database explorer. Drop a `.sqlite`/`.db` file and browse tables, run custom SQL, inspect schema, and view individual records — nothing is uploaded.
 
 Built with React + Vite + Tailwind CSS + wa-sqlite (WebAssembly SQLite) + @tanstack/react-virtual.
 
@@ -15,6 +15,7 @@ Built with React + Vite + Tailwind CSS + wa-sqlite (WebAssembly SQLite) + @tanst
 - **Record tab** — double-click any row to open a form view with type-aware read-only fields
 - **Feedback everywhere** — busy overlays for actions, toast notifications, `console.error` for failures
 - **WebMCP agent tools** — `list_tables`, `view_table` and `select_table` are exposed via `document.modelContext` (WebMCP polyfill), so AI agents can browse the database and drive the UI
+- **Docs & About pages** — in-app documentation (`#/docs`) with real screenshots of every feature, and an About page (`#/about`) covering privacy and architecture; both linked from the app header
 
 ## Development
 
@@ -23,6 +24,16 @@ bun install
 bun run demo:db     # generate public/demo.db (optional — used by the demo button)
 bun run dev         # start dev server
 ```
+
+## Docs page screenshots
+
+The `#/docs` page embeds real screenshots under `public/screenshots/`, captured from the running app with Playwright. To regenerate them after a UI change:
+
+```sh
+bun run build && (bun run preview &) && node scripts/capture-screenshots.mjs
+```
+
+A sanity check for the docs/about pages (sections render, images load, TOC anchors scroll) lives in `scripts/verify-docs-pages.mjs`.
 
 ## Testing
 
