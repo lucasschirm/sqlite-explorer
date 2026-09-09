@@ -1,6 +1,6 @@
-# slitex
+# SQLite Explorer
 
-A fully offline, browser-based SQLite database viewer. Drop a `.sqlite`/`.db` file and browse tables, run custom SQL, inspect schema, and view individual records — nothing is uploaded.
+(`slitex`, browser-based SQLite database explorer. Drop a `.sqlite`/`.db` file and browse tables, run custom SQL, inspect schema, and view individual records — nothing is uploaded.
 
 Also available as a CLI: `slitex mydata.db` opens any local database in the viewer straight from your terminal, no drop zone required.
 
@@ -17,6 +17,7 @@ Built with React + Vite + Tailwind CSS + wa-sqlite (WebAssembly SQLite) + @tanst
 - **Record tab** — double-click any row to open a form view with type-aware read-only fields
 - **Feedback everywhere** — busy overlays for actions, toast notifications, `console.error` for failures
 - **WebMCP agent tools** — `list_tables`, `view_table` and `select_table` are exposed via `document.modelContext` (WebMCP polyfill), so AI agents can browse the database and drive the UI
+- **Docs & About pages** — in-app documentation (`#/docs`) with real screenshots of every feature, and an About page (`#/about`) covering privacy and architecture; both linked from the app header
 
 ## CLI: `slitex <file>`
 
@@ -46,6 +47,16 @@ bun run dev         # start dev server
 
 The site entry (`index.html`) is the public drop-zone app. The CLI entry (`local.html`) is the same app in `cliMode`: it auto-opens the database exposed by the slitex server via `/api/boot` and renders the explorer directly.
 
+## Docs page screenshots
+
+The `#/docs` page embeds real screenshots under `public/screenshots/`, captured from the running app with Playwright. To regenerate them after a UI change:
+
+```sh
+bun run build && (bun run preview &) && node scripts/capture-screenshots.mjs
+```
+
+A sanity check for the docs/about pages (sections render, images load, TOC anchors scroll) lives in `scripts/verify-docs-pages.mjs`.
+
 ## Testing
 
 End-to-end tests use Playwright against the production build (`vite preview`):
@@ -60,20 +71,11 @@ The e2e suite loads the demo database and verifies: table listing, custom SQL qu
 
 ## CI / CD
 
-Two GitHub Actions workflows are included:
+GitHub Actions workflows are included:
 
 - **`.github/workflows/ci.yml`** — on push/PR to `main`: typecheck, build, then Playwright e2e tests with browser installation.
-- **`.github/workflows/deploy-pages.yml`** — on push to `main` (or manual dispatch): builds with `VITE_BASE=/<repo-name>/` and deploys to GitHub Pages.
-
-### Enabling GitHub Pages
-
-1. Push the repository to GitHub.
-2. In the repo settings, go to **Pages** and set **Source** to **GitHub Actions**.
-3. The deploy workflow will publish on the next push to `main` (or run it manually from the Actions tab).
-
-## Building for a subpath
-
-GitHub Pages serves projects under `/<repo-name>/`. The deploy workflow handles this via the `VITE_BASE` environment variable, which configures Vite's `base`. For other subpath deployments, set `VITE_BASE` before running `bun run build`.
+- **`.github/workflows/firebase-hosting-pull-request.yml`** — on PR: builds and deploys a preview channel to Firebase Hosting.
+- **`.github/workflows/firebase-hosting-merge.yml`** — on push to `main`: builds and deploys live to Firebase Hosting.
 
 ## WebMCP tools
 

@@ -29,7 +29,7 @@ export function SqlEditor({ initialSql, isEditable = true, onRun, error }: SqlEd
     const editor = monaco.editor.create(container, {
       value: initialSql,
       language: "sql",
-      theme: "sqlite-viewer",
+      theme: "sqlite-explorer",
       readOnly: !isEditable,
       minimap: { enabled: false },
       automaticLayout: true,
