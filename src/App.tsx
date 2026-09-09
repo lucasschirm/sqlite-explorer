@@ -50,7 +50,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-function App() {
+function App({ cliMode = false }: { cliMode?: boolean }) {
   const { showToast } = useToast();
 
   // Synchronous re-entry guard (state updates are async, so two drops in the
@@ -92,18 +92,20 @@ function App() {
   // Preload the local SQL model (WebLLM) in the background at boot — before
   // any database is opened. Fire-and-forget: downloads are cached by the
   // browser, failures only dim the status pill, nothing blocks the UI.
+  // Skipped in CLI mode: local.html boots straight into an open database.
   useEffect(() => {
+    if (cliMode) return;
     aiClient.preload(assetUrl(""));
   }, []);
 
-  // Load a database from a blob (File or fetched file) via the worker.
-  // The blob is handed over by reference — nothing is read into memory here.
-  const loadDbFromBlob = useCallback(
-    async (blob: Blob, fname: string) => {
+  // Open a database via the worker. `opener` abstracts the source: a local
+  // blob (site) or an HTTP range-backed URL (slitex CLI).
+  const openDatabase = useCallback(
+    async (opener: (onProgress: (p: OpenProgress) => void) => Promise<TableInfo[]>, fname: string) => {
       try {
         setBusy({ message: "Opening database", detail: `${fname} — pages load on demand` });
 
-        const tables = await dbClient.open(blob, fname, (p: OpenProgress) => {
+        const tables = await opener((p: OpenProgress) => {
           setBusy({ message: "Opening database", detail: `${fname} — ${p.detail}` });
         });
 
@@ -134,6 +136,30 @@ function App() {
     },
     [showToast]
   );
+
+  // CLI mode: the slitex server pre-opens a database — boot straight into
+  // the explorer (the drop zone only appears if the open fails).
+  useEffect(() => {
+    if (!cliMode) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/boot");
+        if (!res.ok) throw new Error(`HTTP ${res.status} from /api/boot`);
+        const boot = (await res.json()) as { name: string; url: string };
+        if (cancelled) return;
+        await openDatabase((onP) => dbClient.openRemote(boot.url, boot.name, onP), boot.name);
+      } catch (err) {
+        console.error("CLI boot failed:", err);
+        if (cancelled) return;
+        setBusy(null);
+        showToast("error", `Failed to open database: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [cliMode, openDatabase, showToast]);
 
   // Handle file selection/drop
   const handleFilePicked = useCallback(
@@ -168,9 +194,9 @@ function App() {
         // 2) Hand the file reference to the worker. SQLite reads pages on
         //    demand through the blob VFS, so multi-GB files open instantly
         //    with no whole-file read.
-        await loadDbFromBlob(file, file.name);
+        await openDatabase((onP) => dbClient.open(file, file.name, onP), file.name);
       } catch (err) {
-        // loadDbFromBlob reports open failures itself; this catch handles
+        // openDatabase reports open failures itself; this catch handles
         // everything before that (header validation).
         setBusy(null);
         showToast("error", err instanceof Error ? err.message : String(err));
@@ -178,7 +204,7 @@ function App() {
         busyRef.current = false;
       }
     },
-    [showToast, loadDbFromBlob]
+    [showToast, openDatabase]
   );
 
   // Load the bundled demo database
@@ -199,7 +225,7 @@ function App() {
       if (!looksLikeSqlite(buffer)) {
         throw new Error("Bundled demo.db failed validation");
       }
-      await loadDbFromBlob(new Blob([buffer]), "demo.db");
+      await openDatabase((onP) => dbClient.open(new Blob([buffer]), "demo.db", onP), "demo.db");
     } catch (err) {
       console.error("Failed to load demo database:", err);
       setBusy(null);
@@ -210,7 +236,7 @@ function App() {
     } finally {
       busyRef.current = false;
     }
-  }, [showToast, loadDbFromBlob]);
+  }, [showToast, openDatabase]);
 
   // Async query helpers -------------------------------------------------------
 
@@ -552,7 +578,7 @@ function App() {
       <header className="px-4 py-2 bg-gray-900 text-white flex items-center gap-3 shrink-0">
         <span className="text-lg">🗄️</span>
         <h1 className="text-sm font-semibold">SQLite Viewer</h1>
-        <AiStatusPill />
+        {!cliMode && <AiStatusPill />}
         {filename && (
           <>
             <span className="text-gray-500 text-xs">—</span>
@@ -629,10 +655,10 @@ function App() {
 
 const assetUrl = (name: string) => `${(import.meta.env.BASE_URL ?? "/").replace(/\/?$/, "/")}${name}`;
 
-export default function WrappedApp() {
+export default function WrappedApp({ cliMode = false }: { cliMode?: boolean }) {
   return (
     <ToastProvider>
-      <App />
+      <App cliMode={cliMode} />
     </ToastProvider>
   );
 }
