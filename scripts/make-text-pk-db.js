@@ -1,5 +1,5 @@
 // Creates /tmp/text-pk.db — a table whose primary key is TEXT (slug-style ids).
-// Regression fixture: the first column value is NOT the rowid, so the viewer
+// Regression fixture: the first column value is NOT the rowid, so the explorer
 // must resolve the real rowid before opening a record.
 import initSqlJs from "sql.js";
 import { writeFileSync } from "node:fs";

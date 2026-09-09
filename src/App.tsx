@@ -534,7 +534,7 @@ function App() {
       <div className="h-screen w-screen flex flex-col bg-gray-50">
         <header className="px-6 py-3 bg-gray-900 text-white flex items-center gap-3 shrink-0">
           <span className="text-lg">🗄️</span>
-          <h1 className="text-sm font-semibold">SQLite Viewer</h1>
+          <h1 className="text-sm font-semibold">SQLite Explorer</h1>
         </header>
         <FileDropZone onPickFile={handleFilePicked} isLoading={busy != null} onDemo={handleLoadDemo} />
         <LoadingOverlay
@@ -551,7 +551,7 @@ function App() {
     <div className="h-screen w-screen flex flex-col bg-white">
       <header className="px-4 py-2 bg-gray-900 text-white flex items-center gap-3 shrink-0">
         <span className="text-lg">🗄️</span>
-        <h1 className="text-sm font-semibold">SQLite Viewer</h1>
+        <h1 className="text-sm font-semibold">SQLite Explorer</h1>
         <AiStatusPill />
         {filename && (
           <>

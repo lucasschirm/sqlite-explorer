@@ -1,6 +1,6 @@
-# SQLite Viewer
+# SQLite Explorer
 
-A fully offline, browser-based SQLite database viewer. Drop a `.sqlite`/`.db` file and browse tables, run custom SQL, inspect schema, and view individual records — nothing is uploaded.
+A fully offline, browser-based SQLite database explorer. Drop a `.sqlite`/`.db` file and browse tables, run custom SQL, inspect schema, and view individual records — nothing is uploaded.
 
 Built with React + Vite + Tailwind CSS + wa-sqlite (WebAssembly SQLite) + @tanstack/react-virtual.
 
