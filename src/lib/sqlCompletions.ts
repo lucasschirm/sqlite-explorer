@@ -81,6 +81,11 @@ export function setSchemaCatalog(c: SchemaCatalog | null): void {
   catalog = c;
 }
 
+/** Current catalog for other consumers (e.g. AI prompt building). */
+export function getSchemaCatalog(): SchemaCatalog | null {
+  return catalog;
+}
+
 let registered = false;
 
 /** Register the completion provider (idempotent; safe to call once per page load). */

@@ -14,6 +14,7 @@ Built with React + Vite + Tailwind CSS + wa-sqlite (WebAssembly SQLite) + @tanst
 - **Structure tab** — columns grid (name, type, notnull, default, pk) and indexes grid (name, unique, origin, columns)
 - **Record tab** — double-click any row to open a form view with type-aware read-only fields
 - **Feedback everywhere** — busy overlays for actions, toast notifications, `console.error` for failures
+- **WebMCP agent tools** — `list_tables`, `view_table` and `select_table` are exposed via `document.modelContext` (WebMCP polyfill), so AI agents can browse the database and drive the UI
 
 ## Development
 
@@ -51,6 +52,26 @@ Two GitHub Actions workflows are included:
 ## Building for a subpath
 
 GitHub Pages serves projects under `/<repo-name>/`. The deploy workflow handles this via the `VITE_BASE` environment variable, which configures Vite's `base`. For other subpath deployments, set `VITE_BASE` before running `bun run build`.
+
+## WebMCP tools
+
+The app registers three tools on `document.modelContext` (via `@mcp-b/webmcp-polyfill`) when it loads:
+
+| Tool | Input | Behavior |
+|---|---|---|
+| `list_tables` | `search?` | Markdown table of tables + row counts; the sidebar list is filtered to match. |
+| `view_table` | `table` | Columns, indexes and related tables (foreign keys, both directions); opens the table's Structure tab. Fails with the raw SQLite error for unknown tables. |
+| `select_table` | `sql`, `page?` | Runs SQL with a hard limit of 1000 records per page. Returns a markdown table plus total records, total pages and current page; the result opens as a tab in the UI. |
+
+All tools are read-only. Errors are returned as the raw SQLite error text (e.g. `no such table: foo`). For testing, the polyfill is initialized with `installTestingShim: true`, exposing `navigator.modelContextTesting` (`listTools()`, `executeTool(name, inputJson)`).
+
+## Local AI (ghost-text completions)
+
+The Monaco editor offers Copilot-style ghost-text SQL completions powered by **Qwen2.5-Coder-1.5B** running fully in-browser via [WebLLM](https://github.com/mlc-ai/web-llm) — no server, no Hugging Face calls at runtime.
+
+- **Model hosting**: weights are fetched with `bun run model:fetch` into `public/models/qwen25-coder-1.5b/` (gitignored, ~845 MB) and served from the app's own origin. WebLLM's `cleanModelUrl()` appends `resolve/main/` unless the URL already has it, so the directory **must** mirror the HuggingFace layout: `public/models/qwen25-coder-1.5b/resolve/main/`.
+- **Inference worker**: `src/worker/aiWorker.ts` hosts the MLCEngine so downloads, GPU init and generation never touch the UI thread. The model is preloaded at app boot (fire-and-forget, browser-cached across visits).
+- **Graceful degradation**: the status pill in the header shows loading progress; on machines without WebGPU (or any init failure) AI silently stays dormant — the app never blocks or breaks. Verify the pipeline with `node scripts/check-ai-pipeline.mjs` against a running preview (on a WebGPU machine it confirms the model reaches `ready`).
 
 ## Notes
 

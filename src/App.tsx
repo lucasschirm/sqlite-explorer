@@ -17,10 +17,18 @@ import { DataGrid } from "./components/DataGrid";
 import { StructureTab } from "./components/StructureTab";
 import { RecordDrawer } from "./components/RecordDrawer";
 import { buildSchemaCatalog, setSchemaCatalog } from "./lib/sqlCompletions";
+import { initWebMcpTools, setWebMcpController, buildPagedQuery } from "./lib/webmcp";
+import { aiClient } from "./lib/aiClient";
+import { AiStatusPill } from "./components/AiStatusPill";
 
 let tabIdCounter = 0;
 function nextTabId() {
   return `tab-${++tabIdCounter}`;
+}
+
+let sqlTabCounter = 0;
+function nextSqlTitle() {
+  return `SQL ${++sqlTabCounter}`;
 }
 
 const SQLITE_HEADER = "SQLite format 3\u0000";
@@ -66,12 +74,27 @@ function App() {
     Record<string, { columns: QueryResult; indexes: QueryResult }>
   >({});
 
+  // Sidebar table filter — driven by the WebMCP list_tables tool.
+  const [tableFilter, setTableFilter] = useState("");
+
   // Right-side drawer showing one record in form view.
   const [recordDrawer, setRecordDrawer] = useState<{
     tableName: string;
     columns: ColumnInfo[];
     record: QueryResult;
   } | null>(null);
+
+  // Register the agent-facing WebMCP tools once on mount.
+  useEffect(() => {
+    initWebMcpTools();
+  }, []);
+
+  // Preload the local SQL model (WebLLM) in the background at boot — before
+  // any database is opened. Fire-and-forget: downloads are cached by the
+  // browser, failures only dim the status pill, nothing blocks the UI.
+  useEffect(() => {
+    aiClient.preload(assetUrl(""));
+  }, []);
 
   // Load a database from a blob (File or fetched file) via the worker.
   // The blob is handed over by reference — nothing is read into memory here.
@@ -377,7 +400,39 @@ function App() {
       }
     },
     [tabs, activeTabId, showToast]
+  );  // Open/refresh a tab reflecting a WebMCP select_table result (paged SQL).
+  const openAgentSqlTab = useCallback(
+    async (sql: string, page: number) => {
+      try {
+        const paged = buildPagedQuery(sql, page);
+        const existing = tabs.find((t) => t.type === "data" && t.sql === sql);
+        const id = existing ? existing.id : nextTabId();
+        if (!existing) {
+          const title = nextSqlTitle();
+          setTabs((prev) => [...prev, { id, type: "data", title, tableName: "", sql }]);
+        }
+        setActiveTabId(id);
+        const result = await dbClient.query(paged.pageSql);
+        setTabResults((prev) => ({ ...prev, [id]: { result, error: null } }));
+      } catch (err) {
+        console.error("Failed to open WebMCP SQL tab:", err);
+        showToast("error", err instanceof Error ? err.message : String(err));
+      }
+    },
+    [tabs, showToast]
   );
+
+  // Keep the WebMCP tool controller pointed at the latest app state/actions.
+  useEffect(() => {
+    setWebMcpController({
+      isReady: () => hasDb,
+      getTables: () => tables,
+      query: (sql) => dbClient.query(sql),
+      setTableFilter: setTableFilter,
+      openStructure: (table) => void openStructureTab(table),
+      openSqlTab: (sql, page) => void openAgentSqlTab(sql, page),
+    });
+  });
 
   // Row double-click → record drawer
   const handleRowDoubleClick = useCallback(
@@ -469,6 +524,10 @@ function App() {
   }, [handleFilePicked]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
+  const filterText = tableFilter.trim().toLowerCase();
+  const visibleTables = filterText
+    ? tables.filter((t) => t.name.toLowerCase().includes(filterText))
+    : tables;
 
   if (!hasDb) {
     return (
@@ -493,6 +552,7 @@ function App() {
       <header className="px-4 py-2 bg-gray-900 text-white flex items-center gap-3 shrink-0">
         <span className="text-lg">🗄️</span>
         <h1 className="text-sm font-semibold">SQLite Viewer</h1>
+        <AiStatusPill />
         {filename && (
           <>
             <span className="text-gray-500 text-xs">—</span>
@@ -514,7 +574,8 @@ function App() {
       {/* Body */}
       <div className="flex flex-1 min-h-0">
         <Sidebar
-          tables={tables}
+          tables={visibleTables}
+          filteredFrom={tables.length}
           activeTable={activeTab?.tableName ?? null}
           onSelectTable={openDataTab}
           onSelectStructure={openStructureTab}

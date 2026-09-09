@@ -10,10 +10,13 @@
     "preview": "vite preview",
     "demo:db": "bun scripts/make-demo-db.js",
     "wal:db": "bun scripts/make-wal-test-db.js",
+    "model:fetch": "bun scripts/fetch-model.mjs",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
+    "@mcp-b/webmcp-polyfill": "^5.1.0",
+    "@mlc-ai/web-llm": "^0.2.85",
     "@tanstack/react-virtual": "^3.14.10",
     "monaco-editor": "^0.56.0",
     "react": "^19.2.8",

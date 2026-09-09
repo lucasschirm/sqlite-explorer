@@ -2,17 +2,21 @@ import type { TableInfo } from "../types";
 
 interface SidebarProps {
   tables: TableInfo[];
+  /** Total table count before filtering (shown when a filter hides tables). */
+  filteredFrom?: number;
   activeTable: string | null;
   onSelectTable: (tableName: string) => void;
   onSelectStructure: (tableName: string) => void;
 }
 
-export function Sidebar({ tables, activeTable, onSelectTable, onSelectStructure }: SidebarProps) {
+export function Sidebar({ tables, filteredFrom, activeTable, onSelectTable, onSelectStructure }: SidebarProps) {
+  const isFiltered = filteredFrom != null && filteredFrom > tables.length;
   return (
     <div className="w-60 shrink-0 bg-gray-900 text-gray-300 flex flex-col border-r border-gray-700 h-full">
       <div className="px-4 py-3 border-b border-gray-700">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-          Tables ({tables.length})
+          Tables ({tables.length}
+          {isFiltered ? ` of ${filteredFrom}` : ""})
         </h2>
       </div>
       <div className="flex-1 overflow-y-auto min-h-0">

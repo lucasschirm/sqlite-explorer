@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { monaco } from "../lib/monacoSetup";
 import { registerSqlCompletions } from "../lib/sqlCompletions";
+import { registerAiInlineCompletions } from "../lib/aiInlineCompletions";
 import { format as formatSql } from "sql-formatter";
 
 interface SqlEditorProps {
@@ -23,6 +24,7 @@ export function SqlEditor({ initialSql, isEditable = true, onRun, error }: SqlEd
     const container = containerRef.current;
     if (!container) return;
     registerSqlCompletions(monaco);
+    registerAiInlineCompletions(monaco);
 
     const editor = monaco.editor.create(container, {
       value: initialSql,

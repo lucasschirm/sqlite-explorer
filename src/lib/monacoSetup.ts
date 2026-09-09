@@ -23,6 +23,8 @@ import "monaco-editor/languages/definitions/sql/register.js";
 // eslint-disable-next-line import/no-unresolved
 import "monaco-editor/editor/contrib/suggest/browser/suggestController.js";
 // eslint-disable-next-line import/no-unresolved
+import "monaco-editor/editor/contrib/inlineCompletions/browser/inlineCompletions.contribution.js";
+// eslint-disable-next-line import/no-unresolved
 import "monaco-editor/editor/contrib/snippet/browser/snippetController2.js";
 // eslint-disable-next-line import/no-unresolved
 import "monaco-editor/editor/contrib/clipboard/browser/clipboard.js";

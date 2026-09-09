@@ -38,7 +38,9 @@ test.describe("SQLite Viewer", () => {
 
     // Open the customers table (Data tab)
     await sidebar.getByText("customers").click();
-    await expect(page.getByText('SELECT * FROM "customers" LIMIT 100')).toBeVisible();
+    // Monaco ships as a lazy chunk; under parallel workers it can take a
+    // moment beyond the default 5s assertion timeout.
+    await expect(page.getByText('SELECT * FROM "customers" LIMIT 100')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText("Customer 1", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("50 rows")).toBeVisible();
 

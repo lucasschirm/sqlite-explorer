@@ -4,6 +4,9 @@ node_modules
 # Build output
 dist
 
+# Local AI model weights (fetch with: bun run model:fetch)
+public/models
+
 # Logs
 logs
 *.log
