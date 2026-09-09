@@ -49,20 +49,11 @@ The e2e suite loads the demo database and verifies: table listing, custom SQL qu
 
 ## CI / CD
 
-Two GitHub Actions workflows are included:
+GitHub Actions workflows are included:
 
 - **`.github/workflows/ci.yml`** — on push/PR to `main`: typecheck, build, then Playwright e2e tests with browser installation.
-- **`.github/workflows/deploy-pages.yml`** — on push to `main` (or manual dispatch): builds with `VITE_BASE=/<repo-name>/` and deploys to GitHub Pages.
-
-### Enabling GitHub Pages
-
-1. Push the repository to GitHub.
-2. In the repo settings, go to **Pages** and set **Source** to **GitHub Actions**.
-3. The deploy workflow will publish on the next push to `main` (or run it manually from the Actions tab).
-
-## Building for a subpath
-
-GitHub Pages serves projects under `/<repo-name>/`. The deploy workflow handles this via the `VITE_BASE` environment variable, which configures Vite's `base`. For other subpath deployments, set `VITE_BASE` before running `bun run build`.
+- **`.github/workflows/firebase-hosting-pull-request.yml`** — on PR: builds and deploys a preview channel to Firebase Hosting.
+- **`.github/workflows/firebase-hosting-merge.yml`** — on push to `main`: builds and deploys live to Firebase Hosting.
 
 ## WebMCP tools
 
