@@ -117,7 +117,7 @@ export class BlobVFS {
    * which a dropped/picked single file cannot provide — without this, opening
    * a WAL database fails with SQLITE_CANTOPEN. Reading it as a plain legacy
    * file shows the last checkpointed state, which is the best a read-only
-   * viewer without the side files can do. Applied on every header read so
+   * explorer without the side files can do. Applied on every header read so
    * SQLite always sees a consistent view.
    */
   private patchWalHeader(readStart: number, data: Uint8Array): void {
@@ -133,7 +133,7 @@ export class BlobVFS {
     const entry = this.mapIdToEntry.get(fileId);
     if (!entry) return SQLite.SQLITE_IOERR;
 
-    // Writes to the main database file are rejected — this viewer is read-only.
+    // Writes to the main database file are rejected — this explorer is read-only.
     if (!entry.temp) return SQLite.SQLITE_READONLY;
 
     try {
@@ -190,7 +190,7 @@ export class BlobVFS {
   }
 
   // No-op defaults required by the SQLiteVFS contract but unused by this
-  // read-only viewer.
+  // read-only explorer.
   xSync(_fileId: number, _flags: number): number {
     return SQLite.SQLITE_OK;
   }

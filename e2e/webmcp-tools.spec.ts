@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 
 async function loadDemo(page: Page): Promise<void> {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "SQLite Viewer" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "SQLite Explorer" })).toBeVisible();
   await page.getByTestId("load-demo").click();
   const sidebar = page.locator("aside, .w-60").first();
   await sidebar.getByText("customers").waitFor({ timeout: 15_000 });

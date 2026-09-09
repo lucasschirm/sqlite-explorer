@@ -13,10 +13,10 @@ function ensureWalDb(): string {
   return walDbPath;
 }
 
-test.describe("SQLite Viewer", () => {
+test.describe("SQLite Explorer", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "SQLite Viewer" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "SQLite Explorer" })).toBeVisible();
   });
 
   test("shows demo button and drops file validation UI on the landing page", async ({ page }) => {
@@ -176,7 +176,7 @@ test.describe("SQLite Viewer", () => {
 
   test("opens a WAL-journal-mode database file", async ({ page }) => {
     // WAL databases need -wal/-shm side files, which a single dropped/picked
-    // file cannot provide. The viewer must present them as legacy snapshots.
+    // file cannot provide. The explorer must present them as legacy snapshots.
     const walDb = ensureWalDb();
     await page.setInputFiles('input[type="file"]', walDb);
 

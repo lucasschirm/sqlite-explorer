@@ -43,7 +43,7 @@ self.MonacoEnvironment = {
 };
 
 // SQL is the only language; drop unused built-in features to trim surface area.
-monaco.editor.defineTheme("sqlite-viewer", {
+monaco.editor.defineTheme("sqlite-explorer", {
   base: "vs",
   inherit: true,
   rules: [
