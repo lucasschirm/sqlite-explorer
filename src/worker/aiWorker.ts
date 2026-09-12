@@ -35,11 +35,30 @@ function withBase(path: string, baseUrl: string): string {
   return new URL(path.replace(/^\//, ""), base).href;
 }
 
+// The model weights live in public/models/ — gitignored and only populated by
+// `bun run model:fetch` — so on fresh clones (and most deployed previews) they
+// are simply not served. WebLLM's first request is mlc-chat-config.json; when
+// it 404s, SPA fallback returns index.html and WebLLM dies on
+// JSON.parse("<!doctype …") with an unhelpful SyntaxError. Probe for that file
+// up front and degrade to a clean "unsupported" state instead.
+class MissingModelFilesError extends Error {
+  constructor() {
+    super("AI model files not served (public/models is gitignored — run: bun run model:fetch)");
+    this.name = "MissingModelFilesError";
+  }
+}
+
+async function assertModelFilesAvailable(baseUrl: string): Promise<void> {
+  const res = await fetch(withBase(`${MODEL_DIR}/mlc-chat-config.json`, baseUrl));
+  if (!res.ok) throw new MissingModelFilesError();
+}
+
 let engine: webllm.MLCEngine | null = null;
 let initPromise: Promise<void> | null = null;
 
 async function ensureEngine(baseUrl: string): Promise<webllm.MLCEngine> {
   if (engine) return engine;
+  await assertModelFilesAvailable(baseUrl);
   const cfg: webllm.AppConfig = {
     model_list: [
       {
@@ -65,10 +84,11 @@ async function init(baseUrl: string): Promise<void> {
     })
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
-      // No compatible GPU adapter = this device can never run the model;
-      // surface it as a permanent "unsupported" rather than a transient error.
-      if (/compatible gpu|webgpu/i.test(message)) {
-        console.warn("aiWorker: WebGPU unavailable:", message);
+      // Permanent "can never run here" conditions surface as "unsupported"
+      // (the status pill disappears) rather than a transient error: no
+      // compatible GPU adapter, or the gitignored model files are not served.
+      if (err instanceof MissingModelFilesError || /compatible gpu|webgpu/i.test(message)) {
+        console.warn("aiWorker: AI features unavailable:", message);
         self.postMessage({ type: "unsupported", message });
       } else {
         console.error("aiWorker: engine init failed:", err);
