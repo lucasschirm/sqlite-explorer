@@ -8,6 +8,9 @@ dist
 # Local AI model weights (fetch with: bun run model:fetch)
 public/models
 
+# Environment files (secrets stay local)
+.env
+
 # Logs
 logs
 *.log

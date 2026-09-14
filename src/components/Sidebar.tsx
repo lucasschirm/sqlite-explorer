@@ -1,6 +1,8 @@
 import type { TableInfo } from "../types";
 
 interface SidebarProps {
+  /** Sidebar width in px (controlled by the draggable resizer). */
+  width?: number;
   tables: TableInfo[];
   /** Total table count before filtering (shown when a filter hides tables). */
   filteredFrom?: number;
@@ -9,10 +11,13 @@ interface SidebarProps {
   onSelectStructure: (tableName: string) => void;
 }
 
-export function Sidebar({ tables, filteredFrom, activeTable, onSelectTable, onSelectStructure }: SidebarProps) {
+export function Sidebar({ width, tables, filteredFrom, activeTable, onSelectTable, onSelectStructure }: SidebarProps) {
   const isFiltered = filteredFrom != null && filteredFrom > tables.length;
   return (
-    <div className="w-60 shrink-0 bg-gray-900 text-gray-300 flex flex-col border-r border-gray-700 h-full">
+    <aside
+      style={width != null ? { width } : undefined}
+      className="w-60 shrink-0 bg-gray-900 text-gray-300 flex flex-col border-r border-gray-700 h-full"
+    >
       <div className="px-4 py-3 border-b border-gray-700">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500">
           Tables ({tables.length}
@@ -60,6 +65,6 @@ export function Sidebar({ tables, filteredFrom, activeTable, onSelectTable, onSe
           </div>
         )}
       </div>
-    </div>
+    </aside>
   );
 }

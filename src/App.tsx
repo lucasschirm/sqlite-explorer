@@ -7,6 +7,7 @@ import { ToastProvider, useToast } from "./components/Toast";
 import { LoadingOverlay } from "./components/LoadingOverlay";
 import { FileDropZone } from "./components/FileDropZone";
 import { Sidebar } from "./components/Sidebar";
+import { SidebarResizer, SIDEBAR_DEFAULT_WIDTH } from "./components/SidebarResizer";
 import { TabBar } from "./components/TabBar";
 // Monaco is heavy (~700KB gzipped) — load it only when a database is open
 // and a data tab renders the editor, keeping the drop-zone page instant.
@@ -95,6 +96,7 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
   // Synchronous re-entry guard (state updates are async, so two drops in the
   // same tick would otherwise start two concurrent loads of the same file).
   const busyRef = useRef(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const [hasDb, setHasDb] = useState(false);
   const [filename, setFilename] = useState<string | null>(null);
 
@@ -115,6 +117,9 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
 
   // Sidebar table filter — driven by the WebMCP list_tables tool.
   const [tableFilter, setTableFilter] = useState("");
+
+  // Draggable sidebar width (px), managed by the SidebarResizer handle.
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
 
   // Right-side drawer showing one record in form view.
   const [recordDrawer, setRecordDrawer] = useState<{
@@ -645,13 +650,19 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
       </header>
 
       {/* Body */}
-      <div className="flex flex-1 min-h-0">
+      <div ref={bodyRef} className="flex flex-1 min-h-0">
         <Sidebar
+          width={sidebarWidth}
           tables={visibleTables}
           filteredFrom={tables.length}
           activeTable={activeTab?.tableName ?? null}
           onSelectTable={openDataTab}
           onSelectStructure={openStructureTab}
+        />
+        <SidebarResizer
+          containerRef={bodyRef}
+          width={sidebarWidth}
+          onResize={setSidebarWidth}
         />
         <div className="flex flex-col flex-1 min-w-0 min-h-0">
           <TabBar tabs={tabs} activeTabId={activeTabId} onSelectTab={setActiveTabId} onCloseTab={handleCloseTab} />
