@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SQLite Explorer — database handover example (sender)</title>
+    <style>
+      /* Deliberately framework-free: just enough CSS to be readable. */
+      :root {
+        color-scheme: light;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 2rem;
+        background: #f8fafc;
+        color: #0f172a;
+      }
+      main {
+        max-width: 640px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+      h1 { font-size: 1.25rem; margin: 0; }
+      p  { font-size: 0.875rem; color: #475569; margin: 0; line-height: 1.6; }
+      code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8125rem; }
+      label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.8125rem; font-weight: 500; }
+      input, button {
+        font: inherit;
+        padding: 0.5rem 0.75rem;
+        border: 1px solid #cbd5e1;
+        border-radius: 0.5rem;
+        background: #fff;
+      }
+      button {
+        cursor: pointer;
+        background: #1e293b;
+        color: #fff;
+        border-color: #1e293b;
+      }
+      button:hover { background: #334155; }
+      button:disabled { opacity: 0.5; cursor: wait; }
+      #status { font-size: 0.875rem; line-height: 1.6; }
+      #status.ok   { color: #15803d; }
+      #status.err  { color: #b91c1c; }
+      #status.wait { color: #64748b; }
+      .row { display: flex; flex-direction: column; gap: 1rem; }
+      @media (min-width: 480px) { .row { flex-direction: row; } .row > label { flex: 1; } }
+      details { font-size: 0.8125rem; color: #475569; }
+      pre {
+        background: #e2e8f0;
+        padding: 0.75rem 1rem;
+        border-radius: 0.5rem;
+        overflow-x: auto;
+        font-size: 0.75rem;
+        line-height: 1.5;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Hand a database to SQLite Explorer</h1>
+      <p>
+        This page is the <b>sender</b>: it embeds the explorer in an iframe, builds a
+        SQLite database <i>in memory</i> (no server, no files), and hands it over with
+        a single <code class="mono">postMessage</code>. The explorer opens it exactly
+        like a dropped file.
+      </p>
+
+      <div class="row">
+        <label>
+          Explorer URL (must allow this page's origin)
+          <input id="explorerUrl" spellcheck="false" placeholder="http://localhost:5173" />
+        </label>
+      </div>
+
+      <button id="openBtn">Open explorer &amp; hand over demo.db</button>
+
+      <p id="status" class="wait">Idle.</p>
+
+      <details open>
+        <summary>What gets sent</summary>
+        <pre>targetWindow.postMessage(
+  { type: "sqlite-explorer:handover", name: "demo.db", blob: dbBlob },
+  explorerOrigin          // exact origin — never "*"
+);</pre>
+        <p>
+          The explorer replies on the same channel:
+          <code class="mono">sqlite-explorer:handover:ack</code> when the database was
+          accepted, or <code class="mono">sqlite-explorer:handover:nack</code> with a
+          <code class="mono">reason</code> when it was rejected (unknown origin, wrong
+          shape, or not a SQLite file — the receiver checks the 16-byte header).
+        </p>
+      </details>
+
+      <script type="module" src="./handover-sender.js"></script>
+    </main>
+  </body>
+</html>
