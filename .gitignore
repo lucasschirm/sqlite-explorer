@@ -3,7 +3,7 @@ node_modules
 
 # Build output
 dist
-cli
+/cli/
 
 # Local AI model weights (fetch with: bun run model:fetch)
 public/models
