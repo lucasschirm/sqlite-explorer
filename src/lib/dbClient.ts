@@ -95,6 +95,25 @@ class DbClient {
     }
   }
 
+  /**
+   * Open a database served over HTTP with Range support (the slitex CLI
+   * server). Pages are fetched on demand — like the blob path, the whole
+   * file never loads into memory.
+   */
+  async openRemote(url: string, name: string, onProgress?: (p: OpenProgress) => void): Promise<TableInfo[]> {
+    this.onProgress = onProgress ?? null;
+    try {
+      const res = await this.send<{ type: "open:ok"; tables: TableInfo[] }>({
+        type: "open-remote",
+        url,
+        name,
+      });
+      return res.tables;
+    } finally {
+      this.onProgress = null;
+    }
+  }
+
   /** Run a SQL statement against the open database. `params` binds to `?` placeholders. */
   async query(sql: string, params: CellValue[] = []): Promise<QueryResult> {
     const res = await this.send<{ type: "query:ok"; result: QueryResult }>({ type: "query", sql, params });

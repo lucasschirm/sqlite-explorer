@@ -1,18 +1,24 @@
-// Read-only VFS that serves SQLite pages directly from a Blob (a File is a
-// Blob). This is what makes multi-gigabyte databases work: SQLite reads only
-// the 4 KiB pages a query touches, so a 2.5 GB file uses a few MB of memory
-// instead of requiring the whole file to be loaded into an ArrayBuffer
-// (which browsers cap at ~2 GB — the failure this replaces).
+// Read-only VFS that serves SQLite pages directly from a source: either a
+// Blob (a File is a Blob) or an HTTP URL that supports Range requests (used
+// by the `slitex` CLI, which streams the file from a local server). This is
+// what makes multi-gigabyte databases work: SQLite reads only the 4 KiB pages
+// a query touches, so a 2.5 GB file uses a few MB of memory instead of
+// requiring the whole file to be loaded into an ArrayBuffer (which browsers
+// cap at ~2 GB — the failure this replaces).
 //
 // Must run inside a Worker: xRead is synchronous (SQLite's C API is sync) and
-// FileReaderSync — which performs the sync Blob reads — only exists in
-// workers.
+// both FileReaderSync — which performs the sync Blob reads — and synchronous
+// XMLHttpRequest (used for HTTP range reads) only exist in workers.
 import * as SQLite from "wa-sqlite";
 
 interface OpenEntry {
   name: string;
-  /** Registered source blob (main database file). Null for temp files. */
+  /** Registered source blob (main database file). Null when url is set or for temp files. */
   blob: Blob | null;
+  /** HTTP URL to read via Range requests (slitex CLI mode). Null when blob is set. */
+  url: string | null;
+  /** Known byte size for url-backed entries (fetched once via HEAD). */
+  fileSize: number | null;
   /** In-memory backing store for writable temp files (sorts, temp tables). */
   temp: { data: Uint8Array; size: number } | null;
 }
@@ -27,29 +33,58 @@ export class BlobVFS {
   name = "blob-vfs";
   mxPathName = 4096;
 
-  /** Registered source blobs, keyed by the path SQLite was asked to open. */
-  private mapNameToBlob = new Map<string, Blob>();
+  /** Registered sources, keyed by the path SQLite was asked to open. */
+  private mapNameToSource = new Map<string, Blob | string>();
+  /** Known sizes for url-backed sources, filled by registerRemote. */
+  private mapNameToSize = new Map<string, number>();
   /** Open file entries, keyed by the sqlite3_file pointer id. */
   private mapIdToEntry = new Map<number, OpenEntry>();
   private syncReader = new FileReaderSync();
 
   /** Make a blob available as a database file for open_v2(name). */
   registerBlob(name: string, blob: Blob): void {
-    this.mapNameToBlob.set(name, blob);
+    this.mapNameToSource.set(name, blob);
   }
 
-  /** Drop all registered blobs (called before opening a new database). */
+  /**
+   * Make an HTTP URL (supporting Range requests) available as a database
+   * file. Probes the size once with a synchronous HEAD so xFileSize can
+   * answer without a round-trip (must run inside the worker).
+   */
+  registerRemote(name: string, url: string): void {
+    this.mapNameToSource.set(name, url);
+    const xhr = new XMLHttpRequest();
+    xhr.open("HEAD", url, false);
+    try {
+      xhr.send(null);
+    } catch (err) {
+      console.error(`BlobVFS: HEAD request for ${url} failed:`, err);
+      return;
+    }
+    const len = Number(xhr.getResponseHeader("Content-Length"));
+    if (xhr.status === 200 && Number.isFinite(len) && len > 0) {
+      this.mapNameToSize.set(name, len);
+    }
+  }
+
+  /** Drop all registered sources (called before opening a new database). */
   clearBlobs(): void {
-    this.mapNameToBlob.clear();
+    this.mapNameToSource.clear();
   }
 
   xOpen(name: string | null, fileId: number, flags: number, pOutFlags: DataView): number {
     try {
       const path = name ?? `__temp_${fileId}`;
-      const blob = this.mapNameToBlob.get(path);
-      if (blob) {
-        // The main database file: serve pages straight from the blob.
-        this.mapIdToEntry.set(fileId, { name: path, blob, temp: null });
+      const source = this.mapNameToSource.get(path);
+      if (source) {
+        // The main database file: serve pages straight from the blob or URL.
+        this.mapIdToEntry.set(fileId, {
+          name: path,
+          blob: source instanceof Blob ? source : null,
+          url: typeof source === "string" ? source : null,
+          fileSize: typeof source === "string" ? (this.mapNameToSize.get(path) ?? null) : null,
+          temp: null,
+        });
         pOutFlags.setInt32(0, SQLite.SQLITE_OPEN_READONLY, true);
         return SQLite.SQLITE_OK;
       }
@@ -57,7 +92,7 @@ export class BlobVFS {
       // Unknown file SQLite wants to create (temp database / journal for
       // sorts and temp tables): back it with growable in-memory storage.
       if (flags & SQLite.SQLITE_OPEN_CREATE) {
-        this.mapIdToEntry.set(fileId, { name: path, blob: null, temp: { data: new Uint8Array(0), size: 0 } });
+        this.mapIdToEntry.set(fileId, { name: path, blob: null, url: null, fileSize: null, temp: { data: new Uint8Array(0), size: 0 } });
         pOutFlags.setInt32(0, flags, true);
         return SQLite.SQLITE_OK;
       }
@@ -84,6 +119,8 @@ export class BlobVFS {
       let bytes: Uint8Array;
       if (entry.temp) {
         bytes = entry.temp.data.subarray(iOffset, iOffset + pData.byteLength);
+      } else if (entry.url) {
+        bytes = this.httpRangeRead(entry.url, iOffset, pData.byteLength);
       } else {
         const size = entry.blob!.size;
         const start = Math.min(iOffset, size);
@@ -109,6 +146,31 @@ export class BlobVFS {
       console.error(`BlobVFS: read of ${pData.byteLength} bytes at offset ${iOffset} from "${entry.name}" failed:`, err);
       return SQLite.SQLITE_IOERR;
     }
+  }
+
+  /**
+   * Synchronous HTTP range read against the slitex server. Only legal inside
+   * a worker — this is the HTTP equivalent of the FileReaderSync blob read.
+   */
+  private httpRangeRead(url: string, offset: number, length: number): Uint8Array {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", url, false);
+    xhr.overrideMimeType("text/plain; charset=x-user-defined");
+    try {
+      xhr.setRequestHeader("Range", `bytes=${offset}-${offset + length - 1}`);
+      xhr.send(null);
+    } catch (err) {
+      console.error(`BlobVFS: range request for ${url} bytes ${offset}..${offset + length - 1} failed:`, err);
+      throw err;
+    }
+    // 206 Partial Content is the normal success; some servers ignore Range
+    // and return 200 with the whole body — slice out what was asked for.
+    if (xhr.status !== 206 && xhr.status !== 200) {
+      throw new Error(`HTTP ${xhr.status} reading ${url} (range ${offset}-${offset + length - 1})`);
+    }
+    const buffer = xhr.response as ArrayBuffer;
+    const bytes = new Uint8Array(buffer);
+    return xhr.status === 200 && bytes.byteLength > length ? bytes.subarray(offset, offset + length) : bytes;
   }
 
   /**
@@ -165,7 +227,7 @@ export class BlobVFS {
   xFileSize(fileId: number, pSize64: DataView): number {
     const entry = this.mapIdToEntry.get(fileId);
     if (!entry) return SQLite.SQLITE_IOERR;
-    const size = entry.temp ? entry.temp.size : entry.blob!.size;
+    const size = entry.temp ? entry.temp.size : (entry.blob?.size ?? entry.fileSize!);
     pSize64.setBigInt64(0, BigInt(size), true);
     return SQLite.SQLITE_OK;
   }
@@ -177,7 +239,7 @@ export class BlobVFS {
   }
 
   xAccess(name: string, _flags: number, pResOut: DataView): number {
-    pResOut.setInt32(0, this.mapNameToBlob.has(name) ? 1 : 0, true);
+    pResOut.setInt32(0, this.mapNameToSource.has(name) ? 1 : 0, true);
     return SQLite.SQLITE_OK;
   }
 

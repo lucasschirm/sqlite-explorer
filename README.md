@@ -1,6 +1,8 @@
 # SQLite Explorer
 
-A fully offline, browser-based SQLite database explorer. Drop a `.sqlite`/`.db` file and browse tables, run custom SQL, inspect schema, and view individual records — nothing is uploaded.
+(`slitex`, browser-based SQLite database explorer. Drop a `.sqlite`/`.db` file and browse tables, run custom SQL, inspect schema, and view individual records — nothing is uploaded.
+
+Also available as a CLI: `slitex mydata.db` opens any local database in the viewer straight from your terminal, no drop zone required.
 
 Built with React + Vite + Tailwind CSS + wa-sqlite (WebAssembly SQLite) + @tanstack/react-virtual.
 
@@ -17,6 +19,24 @@ Built with React + Vite + Tailwind CSS + wa-sqlite (WebAssembly SQLite) + @tanst
 - **WebMCP agent tools** — `list_tables`, `view_table` and `select_table` are exposed via `document.modelContext` (WebMCP polyfill), so AI agents can browse the database and drive the UI
 - **Docs & About pages** — in-app documentation (`#/docs`) with real screenshots of every feature, and an About page (`#/about`) covering privacy and architecture; both linked from the app header
 
+## CLI: `slitex <file>`
+
+```sh
+npm install -g slitex
+slitex mydata.db                    # serves the viewer at http://localhost:3000 and opens it
+slitex mydata.db --port 8080        # custom port
+slitex mydata.db --no-open          # don't launch the browser automatically
+```
+
+The command starts a small local Fastify server (bound to `127.0.0.1`) that serves the prebuilt viewer (`local.html`) and streams the database over HTTP Range requests. The UI's SQLite worker fetches only the 4 KiB pages a query touches — exactly like the drop-zone path, multi-gigabyte files open instantly and are never loaded into memory. Nothing leaves your machine; stop with `Ctrl+C`.
+
+Local development of the CLI:
+
+```sh
+bun run build   # builds the UI (dist/) and compiles the CLI (cli/)
+bun run cli -- public/demo.db --port 4545
+```
+
 ## Development
 
 ```sh
@@ -24,6 +44,8 @@ bun install
 bun run demo:db     # generate public/demo.db (optional — used by the demo button)
 bun run dev         # start dev server
 ```
+
+The site entry (`index.html`) is the public drop-zone app. The CLI entry (`local.html`) is the same app in `cliMode`: it auto-opens the database exposed by the slitex server via `/api/boot` and renders the explorer directly.
 
 ## Docs page screenshots
 
