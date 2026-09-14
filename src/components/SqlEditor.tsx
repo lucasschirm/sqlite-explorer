@@ -9,15 +9,21 @@ interface SqlEditorProps {
   isEditable?: boolean;
   onRun: (sql: string) => void;
   error?: string | null;
+  /** Always-rendered Save button; hidden when omitted (plain table tabs). */
+  onSave?: () => void;
+  /** Called on every content change so the parent can track the draft. */
+  onSqlChange?: (sql: string) => void;
 }
 
-export function SqlEditor({ initialSql, isEditable = true, onRun, error }: SqlEditorProps) {
+export function SqlEditor({ initialSql, isEditable = true, onRun, error, onSave, onSqlChange }: SqlEditorProps) {
   const [value, setValue] = useState(initialSql);
   const [formatError, setFormatError] = useState<string | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const onRunRef = useRef(onRun);
   onRunRef.current = onRun;
+  const onSqlChangeRef = useRef(onSqlChange);
+  onSqlChangeRef.current = onSqlChange;
 
   // Create the editor once on mount.
   useEffect(() => {
@@ -51,7 +57,9 @@ export function SqlEditor({ initialSql, isEditable = true, onRun, error }: SqlEd
     const model = editor.getModel();
 
     const disposable = model?.onDidChangeContent(() => {
-      setValue(model.getValue());
+      const text = model.getValue();
+      setValue(text);
+      onSqlChangeRef.current?.(text);
     });
 
     // Ctrl/Cmd+Enter runs the query; Shift+Alt+F formats.
@@ -130,6 +138,15 @@ export function SqlEditor({ initialSql, isEditable = true, onRun, error }: SqlEd
           >
             Format
           </button>
+          {onSave && (
+            <button
+              onClick={onSave}
+              title="Save this SQL as a view"
+              className="px-4 py-2 text-xs font-medium text-blue-700 hover:bg-blue-50 transition-colors border-t border-gray-200"
+            >
+              Save
+            </button>
+          )}
           <button
             onClick={handleRun}
             className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-colors"

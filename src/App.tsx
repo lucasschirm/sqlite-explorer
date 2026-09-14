@@ -9,6 +9,20 @@ import { FileDropZone } from "./components/FileDropZone";
 import { Sidebar } from "./components/Sidebar";
 import { SidebarResizer, SIDEBAR_DEFAULT_WIDTH } from "./components/SidebarResizer";
 import { TabBar } from "./components/TabBar";
+import { NameModal } from "./components/NameModal";
+import { SaveOptionsModal } from "./components/SaveOptionsModal";
+import type { ProjectsSectionMode } from "./components/ProjectsSection";
+import {
+  listProjects,
+  createProject,
+  deleteProject,
+  deleteView,
+  findView,
+  upsertView,
+  projectNameExists,
+  viewNameExists,
+  type StoredProject,
+} from "./lib/projectsStore";
 // Monaco is heavy (~700KB gzipped) — load it only when a database is open
 // and a data tab renders the editor, keeping the drop-zone page instant.
 const SqlEditor = lazy(() =>
@@ -120,6 +134,26 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
 
   // Draggable sidebar width (px), managed by the SidebarResizer handle.
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
+
+  // Projects & views (persisted in localStorage). A project groups saved SQL
+  // views; opening one swaps the sidebar's Projects list for its Views list
+  // and shows the view editor in the main pane.
+  const [projects, setProjects] = useState<StoredProject[]>(() => listProjects());
+  const [projectsMode, setProjectsMode] = useState<ProjectsSectionMode>("projects");
+  const [openProjectId, setOpenProjectId] = useState<string | null>(null);
+  const [activeViewId, setActiveViewId] = useState<string | null>(null);
+  const [viewSql, setViewSql] = useState("");
+  const [viewSavedSql, setViewSavedSql] = useState("");
+  const [viewResult, setViewResult] = useState<{ result: QueryResult; error: string | null } | null>(null);
+  const [viewEditorOpen, setViewEditorOpen] = useState(false);
+  const viewDirty = viewSql !== viewSavedSql;
+  // Browser-only SPA: reading localStorage lazily at first render is safe.
+  // After every mutation we re-read with setProjects(listProjects()).
+
+  // Modals: create-project, save-existing-view options, name-new-view.
+  const [projectModalOpen, setProjectModalOpen] = useState(false);
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const [viewNameModalOpen, setViewNameModalOpen] = useState(false);
 
   // Right-side drawer showing one record in form view.
   const [recordDrawer, setRecordDrawer] = useState<{
@@ -318,6 +352,7 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
         const newTab: Tab = { id, type: "data", title: tableName, tableName, sql };
         setTabs((prev) => [...prev, newTab]);
         setActiveTabId(id);
+        setViewEditorOpen(false); // table click takes over the main pane
         void runTableQuery(id, sql).finally(() => setBusy(null));
       } catch (err) {
         console.error("Failed to open data tab:", err);
@@ -350,6 +385,7 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
 
         setTabs((prev) => [...prev, newTab]);
         setActiveTabId(structureId);
+        setViewEditorOpen(false); // table click takes over the main pane
 
         const columnsRes = await dbClient.query(`PRAGMA table_info("${tableName}")`);
         const indexListRes = await dbClient.query(`PRAGMA index_list("${tableName}")`);
@@ -504,6 +540,193 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
     });
   });
 
+  // Projects & views -----------------------------------------------------------
+
+  /** Run a view's SQL in the main-pane editor and record it as saved state. */
+  const runViewSql = useCallback(async (sql: string) => {
+    try {
+      setBusy({ message: "Running query", detail: null });
+      const result = await dbClient.query(sql);
+      setViewResult({ result, error: null });
+    } catch (err) {
+      setViewResult({
+        result: { columns: [], rows: [] },
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setBusy(null);
+      // A manual run re-baselines the dirty badge, mirroring tab behavior.
+      setViewSavedSql(sql);
+    }
+  }, []);
+
+  const openProjectViews = useCallback(
+    (projectId: string) => {
+      setProjectsMode("views");
+      setOpenProjectId(projectId);
+      setActiveViewId(null);
+      setViewEditorOpen(false);
+      setViewSql("");
+      setViewSavedSql("");
+      setViewResult(null);
+    },
+    []
+  );
+
+  const closeProjectViews = useCallback(() => {
+    setProjectsMode("projects");
+    setOpenProjectId(null);
+    setActiveViewId(null);
+    setViewEditorOpen(false);
+    setViewSql("");
+    setViewSavedSql("");
+    setViewResult(null);
+  }, []);
+
+  const handleCreateProject = useCallback(
+    (name: string) => {
+      try {
+        const project = createProject(name);
+        setProjectModalOpen(false);
+        setProjects(listProjects());
+        openProjectViews(project.id);
+        showToast("success", `Project "${project.name}" created`);
+      } catch (err) {
+        console.error("Failed to create project:", err);
+        showToast("error", `Failed to create project: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [openProjectViews, showToast]
+  );
+
+  const handleDeleteProject = useCallback(
+    (projectId: string) => {
+      try {
+        const name = projects.find((p) => p.id === projectId)?.name ?? "project";
+        deleteProject(projectId);
+        setProjects(listProjects());
+        if (openProjectId === projectId) closeProjectViews();
+        showToast("success", `Deleted project "${name}"`);
+      } catch (err) {
+        console.error("Failed to delete project:", err);
+        showToast("error", `Failed to delete project: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [projects, openProjectId, closeProjectViews, showToast]
+  );
+
+  /** Create-view button (Views section): empty editor on the right. */
+  const handleStartCreateView = useCallback(() => {
+    if (!openProjectId) return;
+    setActiveViewId(null);
+    setViewSql("");
+    setViewSavedSql("");
+    setViewResult(null);
+    setViewEditorOpen(true);
+  }, [openProjectId]);
+
+  /** Click an existing view: open with its SQL filled in and executed. */
+  const handleSelectView = useCallback(
+    (projectId: string, viewId: string) => {
+      const found = findView(projectId, viewId);
+      if (!found) {
+        showToast("error", "That view no longer exists");
+        setProjects(listProjects());
+        return;
+      }
+      setProjectsMode("views");
+      setOpenProjectId(projectId);
+      setActiveViewId(viewId);
+      setViewEditorOpen(true);
+      setViewSql(found.view.sql);
+      setViewSavedSql(found.view.sql);
+      setViewResult(null);
+      void runViewSql(found.view.sql);
+    },
+    [runViewSql, showToast]
+  );
+
+  const handleCloseViewEditor = useCallback(() => {
+    setViewEditorOpen(false);
+    setActiveViewId(null);
+    setViewSql("");
+    setViewSavedSql("");
+    setViewResult(null);
+  }, []);
+
+  /** Save button under Format: options when updating, name modal otherwise. */
+  const handleSaveViewClicked = useCallback(() => {
+    if (!openProjectId) return;
+    if (!viewSql.trim()) {
+      showToast("info", "Write some SQL first");
+      return;
+    }
+    if (activeViewId != null) {
+      setSaveModalOpen(true);
+    } else {
+      setViewNameModalOpen(true);
+    }
+  }, [openProjectId, viewSql, activeViewId, showToast]);
+
+  /** SaveOptionsModal → Save: overwrite the existing view in place. */
+  const handleSaveExistingView = useCallback(() => {
+    if (!openProjectId || activeViewId == null) return;
+    try {
+      upsertView(openProjectId, activeViewId, "", viewSql);
+      // Re-read for the (possibly unchanged) name shown in the UI.
+      const name = findView(openProjectId, activeViewId)?.view.name ?? "view";
+      setSaveModalOpen(false);
+      setProjects(listProjects());
+      setViewSavedSql(viewSql);
+      showToast("success", `View "${name}" saved`);
+    } catch (err) {
+      console.error("Failed to save view:", err);
+      showToast("error", `Failed to save view: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [openProjectId, activeViewId, viewSql, showToast]);
+
+  /** SaveOptionsModal → Create a new one → same name modal as a new view. */
+  const handleSaveAsNewView = useCallback(() => {
+    setSaveModalOpen(false);
+    setActiveViewId(null); // save as a brand-new view, don't touch the existing one
+    setViewNameModalOpen(true);
+  }, []);
+
+  /** NameModal confirm for a (new) view name. */
+  const handleSaveNamedView = useCallback(
+    (name: string) => {
+      if (!openProjectId) return;
+      try {
+        const saved = upsertView(openProjectId, activeViewId, name, viewSql);
+        setViewNameModalOpen(false);
+        setProjects(listProjects());
+        setActiveViewId(saved.id);
+        setViewSavedSql(viewSql);
+        showToast("success", `View "${saved.name}" saved`);
+      } catch (err) {
+        console.error("Failed to save view:", err);
+        showToast("error", `Failed to save view: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [openProjectId, activeViewId, viewSql, showToast]
+  );
+
+  const handleDeleteView = useCallback(
+    (projectId: string, viewId: string) => {
+      try {
+        const name = projects.find((p) => p.id === projectId)?.views.find((v) => v.id === viewId)?.name ?? "view";
+        deleteView(projectId, viewId);
+        setProjects(listProjects());
+        if (activeViewId === viewId) handleCloseViewEditor();
+        showToast("success", `Deleted view "${name}"`);
+      } catch (err) {
+        console.error("Failed to delete view:", err);
+        showToast("error", `Failed to delete view: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [projects, activeViewId, handleCloseViewEditor, showToast]
+  );
+
   // Row double-click → record drawer
   const handleRowDoubleClick = useCallback(
     async (tab: Tab, rowIndex: number) => {
@@ -594,6 +817,10 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
   }, [handleFilePicked]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
+  const activeView =
+    openProjectId != null && activeViewId != null
+      ? projects.find((p) => p.id === openProjectId)?.views.find((v) => v.id === activeViewId) ?? null
+      : null;
   const filterText = tableFilter.trim().toLowerCase();
   const visibleTables = filterText
     ? tables.filter((t) => t.name.toLowerCase().includes(filterText))
@@ -658,6 +885,17 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
           activeTable={activeTab?.tableName ?? null}
           onSelectTable={openDataTab}
           onSelectStructure={openStructureTab}
+          projects={projects}
+          projectsMode={projectsMode}
+          openProject={projects.find((p) => p.id === openProjectId) ?? null}
+          activeViewId={activeViewId}
+          onOpenProject={openProjectViews}
+          onCloseProject={closeProjectViews}
+          onCreateProject={() => setProjectModalOpen(true)}
+          onDeleteProject={handleDeleteProject}
+          onCreateView={handleStartCreateView}
+          onSelectView={handleSelectView}
+          onDeleteView={handleDeleteView}
         />
         <SidebarResizer
           containerRef={bodyRef}
@@ -666,7 +904,56 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
         />
         <div className="flex flex-col flex-1 min-w-0 min-h-0">
           <TabBar tabs={tabs} activeTabId={activeTabId} onSelectTab={setActiveTabId} onCloseTab={handleCloseTab} />
-          {activeTab ? (
+          {viewEditorOpen && openProjectId ? (
+            <div className="flex flex-col flex-1 min-h-0">
+              {/* View editor header: title, dirty badge, row count/error, close × */}
+              <div className="px-4 py-2 flex items-center gap-2 border-b border-gray-200 bg-gray-50 shrink-0">
+                <span className="text-sm">🔎</span>
+                <span className="text-xs font-semibold text-gray-700 truncate">
+                  {activeView
+                    ? `View: ${activeView.name}`
+                    : viewSavedSql
+                      ? "View: Untitled"
+                      : "New view"}
+                </span>
+                {viewDirty && (
+                  <span className="text-[10px] uppercase font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
+                    Unsaved
+                  </span>
+                )}
+                <div className="ml-auto flex items-center gap-3">
+                  {viewResult?.error ? (
+                    <span className="text-xs text-red-600 truncate max-w-[280px]" title={viewResult.error}>
+                      {viewResult.error}
+                    </span>
+                  ) : viewResult ? (
+                    <span className="text-xs text-gray-400">
+                      {viewResult.result.rows.length} row{viewResult.result.rows.length !== 1 ? "s" : ""}
+                    </span>
+                  ) : null}
+                  <button
+                    onClick={handleCloseViewEditor}
+                    aria-label="Close view editor"
+                    title="Close view"
+                    className="w-7 h-7 flex items-center justify-center rounded text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors text-lg leading-none shrink-0"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+              <Suspense fallback={<div className="h-[180px] border-b border-gray-200 bg-gray-50 animate-pulse" />}>
+                <SqlEditor
+                  initialSql={viewSql}
+                  isEditable
+                  onRun={(sql) => void runViewSql(sql)}
+                  onSave={handleSaveViewClicked}
+                  onSqlChange={setViewSql}
+                  error={null}
+                />
+              </Suspense>
+              <DataGrid columns={viewResult?.result.columns ?? []} rows={viewResult?.result.rows ?? []} />
+            </div>
+          ) : activeTab ? (
             <div className="flex flex-col flex-1 min-h-0">
               {activeTab.type === "data" && (
                 <Suspense fallback={<div className="h-[180px] border-b border-gray-200 bg-gray-50 animate-pulse" />}>
@@ -695,7 +982,9 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
             </div>
           ) : (
             <div className="flex items-center justify-center flex-1 text-gray-400 text-sm">
-              Click a table in the sidebar to get started
+              {viewEditorOpen
+                ? "Open a project in the sidebar to manage its views"
+                : "Click a table in the sidebar to get started"}
             </div>
           )}
         </div>
@@ -705,6 +994,45 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
         drawer={recordDrawer}
         onClose={() => setRecordDrawer(null)}
       />
+
+      {/* Create-project modal — opens the new project's Views on save. */}
+      {projectModalOpen && (
+        <NameModal
+          title="Create a project"
+          description="Projects group your saved SQL views."
+          confirmLabel="Create"
+          validate={(name) => (projectNameExists(name) ? `A project named “${name}” already exists` : null)}
+          onConfirm={handleCreateProject}
+          onCancel={() => setProjectModalOpen(false)}
+        />
+      )}
+
+      {/* Save-existing-view options: update in place or fork as a new view. */}
+      {saveModalOpen && activeView && (
+        <SaveOptionsModal
+          viewName={activeView.name}
+          projectViewCount={projects.find((p) => p.id === openProjectId)?.views.length ?? 0}
+          onSave={handleSaveExistingView}
+          onCreateNew={handleSaveAsNewView}
+          onCancel={() => setSaveModalOpen(false)}
+        />
+      )}
+
+      {/* Name-a-view modal: new views and “Create a new one” from the save modal. */}
+      {viewNameModalOpen && openProjectId && (
+        <NameModal
+          title="Save view"
+          description="Name this SQL query — it will be saved in the current project."
+          confirmLabel="Save"
+          validate={(name) =>
+            viewNameExists(openProjectId, name, activeViewId ?? undefined)
+              ? `A view named “${name}” already exists in this project`
+              : null
+          }
+          onConfirm={handleSaveNamedView}
+          onCancel={() => setViewNameModalOpen(false)}
+        />
+      )}
 
       <LoadingOverlay visible={busy != null} message={busy?.message ?? ""} detail={busy?.detail ?? fileDetail} indeterminate />
     </div>
