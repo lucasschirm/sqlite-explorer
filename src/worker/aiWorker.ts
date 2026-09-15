@@ -2,15 +2,17 @@
 // and generation never touch the UI thread. The engine is created lazily on
 // the first "init" message and reuses the browser cache across reloads.
 //
-// The model is served from this app's own origin (public/models/...) —
-// never HuggingFace — via a custom AppConfig model record.
+// The model is served from the dedicated CDN Firebase site (cdn-b89da,
+// https://cdn.lucasschirm.com) — never HuggingFace — via a custom AppConfig
+// model record. The weights are deployed there only when
+// scripts/fetch-model.mjs changes (see firebase-hosting-cdn-merge.yml).
 import * as webllm from "@mlc-ai/web-llm";
 
 // Must match scripts/fetch-model.mjs.
 const MODEL_ID = "Qwen2.5-Coder-1.5B-Instruct-q4f16_1-MLC-local";
 // WebLLM's cleanModelUrl() appends `resolve/main/` unless the URL already has
-// it (HuggingFace layout) — self-hosted model dirs must mirror that structure.
-const MODEL_DIR = "models/qwen25-coder-1.5b/resolve/main";
+// it (HuggingFace layout) — the CDN model dir mirrors that structure.
+const MODEL_DIR = "https://cdn.lucasschirm.com/qwen25-coder-1.5b/resolve/main";
 const MODEL_LIB = "Qwen2-1.5B-Instruct-q4f16_1_cs1k-webgpu.wasm";
 
 const appConfig: webllm.AppConfig = {
@@ -35,15 +37,14 @@ function withBase(path: string, baseUrl: string): string {
   return new URL(path.replace(/^\//, ""), base).href;
 }
 
-// The model weights live in public/models/ — gitignored and only populated by
-// `bun run model:fetch` — so on fresh clones (and most deployed previews) they
-// are simply not served. WebLLM's first request is mlc-chat-config.json; when
-// it 404s, SPA fallback returns index.html and WebLLM dies on
-// JSON.parse("<!doctype …") with an unhelpful SyntaxError. Probe for that file
-// up front and degrade to a clean "unsupported" state instead.
+// The model weights live on the CDN site (cdn.lucasschirm.com) — deployed by
+// CI only when scripts/fetch-model.mjs changes — so until that first deploy
+// they are not served. WebLLM's first request is mlc-chat-config.json; when
+// it 404s (or CORS-blocks), the probe below catches it and we degrade to a
+// clean "unsupported" state instead of an unhelpful JSON.parse SyntaxError.
 class MissingModelFilesError extends Error {
   constructor() {
-    super("AI model files not served (public/models is gitignored — run: bun run model:fetch)");
+    super("AI model files not available on the CDN yet (deploy via scripts/fetch-model.mjs change)");
     this.name = "MissingModelFilesError";
   }
 }

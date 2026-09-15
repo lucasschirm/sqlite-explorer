@@ -1,5 +1,17 @@
 {
   "projects": {
     "default": "sqlite-explorer-ee0d4"
+  },
+  "targets": {
+    "sqlite-explorer-ee0d4": {
+      "hosting": {
+        "sqlite-explorer": [
+          "sqlite-explorer-ee0d4"
+        ],
+        "cdn": [
+          "cdn-b89da"
+        ]
+      }
+    }
   }
 }

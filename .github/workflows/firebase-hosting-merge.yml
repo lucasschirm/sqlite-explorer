@@ -21,20 +21,9 @@ jobs:
       - name: Generate demo database
         run: bun scripts/make-demo-db.js
 
-      # public/models is gitignored (~845 MB); the local-AI feature serves the
-      # weights from this site, so fetch them before vite build bundles public/.
-      # Cached between runs — on a cache hit model:fetch skips every file. Upload
-      # side is deduped by Firebase Hosting (hash-checked, unchanged files are
-      # not re-uploaded), so the weights transfer only on the first deploy.
-      - name: Restore local AI model cache
-        uses: actions/cache@v4
-        with:
-          path: public/models
-          key: webllm-qwen25-1.5b-q4f16_1-v1
-          restore-keys: webllm-qwen25-1.5b-q4f16_1-
-
-      - name: Fetch local AI model
-        run: bun run model:fetch
+      # Model weights are NOT fetched here — they are served from the separate
+      # CDN site (cdn-b89da / cdn.lucasschirm.com) and only redeployed when
+      # scripts/fetch-model.mjs changes (see firebase-hosting-cdn-merge.yml).
 
       - name: Build
         run: bun run build
@@ -44,3 +33,4 @@ jobs:
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SQLITE_EXPLORER_EE0D4 }}
           channelId: live
           projectId: sqlite-explorer-ee0d4
+          target: sqlite-explorer
