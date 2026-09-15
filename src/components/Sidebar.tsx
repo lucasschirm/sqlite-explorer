@@ -1,4 +1,6 @@
 import type { TableInfo } from "../types";
+import type { StoredProject } from "../lib/projectsStore";
+import { ProjectsSection, type ProjectsSectionMode } from "./ProjectsSection";
 
 interface SidebarProps {
   /** Sidebar width in px (controlled by the draggable resizer). */
@@ -9,9 +11,40 @@ interface SidebarProps {
   activeTable: string | null;
   onSelectTable: (tableName: string) => void;
   onSelectStructure: (tableName: string) => void;
+
+  // Projects / views section (below the tables list)
+  projects: StoredProject[];
+  projectsMode: ProjectsSectionMode;
+  openProject: StoredProject | null;
+  activeViewId: string | null;
+  onOpenProject: (projectId: string) => void;
+  onCloseProject: () => void;
+  onCreateProject: () => void;
+  onDeleteProject: (projectId: string) => void;
+  onCreateView: () => void;
+  onSelectView: (projectId: string, viewId: string) => void;
+  onDeleteView: (projectId: string, viewId: string) => void;
 }
 
-export function Sidebar({ width, tables, filteredFrom, activeTable, onSelectTable, onSelectStructure }: SidebarProps) {
+export function Sidebar({
+  width,
+  tables,
+  filteredFrom,
+  activeTable,
+  onSelectTable,
+  onSelectStructure,
+  projects,
+  projectsMode,
+  openProject,
+  activeViewId,
+  onOpenProject,
+  onCloseProject,
+  onCreateProject,
+  onDeleteProject,
+  onCreateView,
+  onSelectView,
+  onDeleteView,
+}: SidebarProps) {
   const isFiltered = filteredFrom != null && filteredFrom > tables.length;
   return (
     <aside
@@ -65,6 +98,20 @@ export function Sidebar({ width, tables, filteredFrom, activeTable, onSelectTabl
           </div>
         )}
       </div>
+
+      <ProjectsSection
+        projects={projects}
+        mode={projectsMode}
+        openProject={openProject}
+        activeViewId={activeViewId}
+        onOpenProject={onOpenProject}
+        onCloseProject={onCloseProject}
+        onCreateProject={onCreateProject}
+        onDeleteProject={onDeleteProject}
+        onCreateView={onCreateView}
+        onSelectView={onSelectView}
+        onDeleteView={onDeleteView}
+      />
     </aside>
   );
 }
