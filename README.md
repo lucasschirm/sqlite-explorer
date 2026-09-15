@@ -133,7 +133,7 @@ All tools are read-only. Errors are returned as the raw SQLite error text (e.g. 
 
 The Monaco editor offers Copilot-style ghost-text SQL completions powered by **Qwen2.5-Coder-1.5B** running fully in-browser via [WebLLM](https://github.com/mlc-ai/web-llm) — no server, no Hugging Face calls at runtime.
 
-- **Model hosting**: weights are fetched with `bun run model:fetch` into `public/models/qwen25-coder-1.5b/` (gitignored, ~845 MB) and served from the app's own origin. WebLLM's `cleanModelUrl()` appends `resolve/main/` unless the URL already has it, so the directory **must** mirror the HuggingFace layout: `public/models/qwen25-coder-1.5b/resolve/main/`.
+- **Model hosting**: weights are fetched with `bun run model:fetch` into `public/models/qwen25-coder-1.5b/` (gitignored, ~845 MB) and served from the dedicated CDN Firebase site (`cdn-b89da`, https://cdn.lucasschirm.com). The CDN is deployed by CI only when `scripts/fetch-model.mjs` changes. WebLLM's `cleanModelUrl()` appends `resolve/main/` unless the URL already has it, so the directory **must** mirror the HuggingFace layout: `models/qwen25-coder-1.5b/resolve/main/`.
 - **Inference worker**: `src/worker/aiWorker.ts` hosts the MLCEngine so downloads, GPU init and generation never touch the UI thread. The model is preloaded at app boot (fire-and-forget, browser-cached across visits).
 - **Graceful degradation**: the status pill in the header shows loading progress; on machines without WebGPU (or any init failure) AI silently stays dormant — the app never blocks or breaks. Verify the pipeline with `node scripts/check-ai-pipeline.mjs` against a running preview (on a WebGPU machine it confirms the model reaches `ready`).
 
