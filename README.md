@@ -4,6 +4,15 @@
 
 Also available as a CLI: `slitex mydata.db` opens any local database in the viewer straight from your terminal, no drop zone required.
 
+## Installation (CLI)
+
+```sh
+npm install @lucasschirm/sqlite-explorer -g
+slitex mydata.db                    # serves the viewer at http://localhost:3000 and opens it
+slitex mydata.db --port 8080        # custom port
+slitex mydata.db --no-open          # don't launch the browser automatically
+```
+
 Built with React + Vite + Tailwind CSS + wa-sqlite (WebAssembly SQLite) + @tanstack/react-virtual.
 
 ## Features
@@ -60,13 +69,6 @@ npx serve examples/sqlite-handover           # http://localhost:3000
 ```
 
 ## CLI: `slitex <file>`
-
-```sh
-npm install -g slitex
-slitex mydata.db                    # serves the viewer at http://localhost:3000 and opens it
-slitex mydata.db --port 8080        # custom port
-slitex mydata.db --no-open          # don't launch the browser automatically
-```
 
 The command starts a small local Fastify server (bound to `127.0.0.1`) that serves the prebuilt viewer (`local.html`) and streams the database over HTTP Range requests. The UI's SQLite worker fetches only the 4 KiB pages a query touches — exactly like the drop-zone path, multi-gigabyte files open instantly and are never loaded into memory. Nothing leaves your machine; stop with `Ctrl+C`.
 
