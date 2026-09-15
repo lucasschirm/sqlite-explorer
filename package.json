@@ -1,10 +1,14 @@
 {
-  "name": "slitex",
+  "name": "@lucasschirm/sqlite-explorer",
   "version": "0.1.0",
   "description": "Browser-based SQLite viewer — use it as a website or open local databases straight from the terminal with `slitex <file>`.",
   "type": "module",
   "private": false,
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lucasschirm/sqlite-explorer.git"
+  },
   "bin": {
     "slitex": "./bin/slitex.js"
   },
