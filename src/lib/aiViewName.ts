@@ -17,7 +17,7 @@ function sanitize(raw: string, fallback: string): string {
 }
 
 /** First meaningful line of the SQL, used as both prompt context and fallback. */
-export function sqlNameFallback(sql: string): string {
+function sqlNameFallback(sql: string): string {
   const line = sql
     .split("\n")
     .map((l) => l.replace(/--.*$/, "").trim())

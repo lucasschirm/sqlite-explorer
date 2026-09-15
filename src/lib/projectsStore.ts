@@ -105,6 +105,16 @@ export function findView(
   return view ? { project, view } : null;
 }
 
+/** Look up a view by ids within an in-memory projects snapshot. */
+export function getViewFrom(
+  projects: StoredProject[],
+  projectId: string | null,
+  viewId: string | null
+): StoredView | null {
+  if (!projectId || !viewId) return null;
+  return projects.find((p) => p.id === projectId)?.views.find((v) => v.id === viewId) ?? null;
+}
+
 /**
  * Create or update a view. Pass viewId=null to create. When updating, an empty
  * `name` keeps the stored name (SQL-only update); a non-empty name renames.
