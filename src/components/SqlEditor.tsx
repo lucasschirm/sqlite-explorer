@@ -9,11 +9,20 @@ interface SqlEditorProps {
   isEditable?: boolean;
   onRun: (sql: string) => void;
   error?: string | null;
-  /** Always-rendered Save button; hidden when omitted (plain table tabs). */
-  onSave?: () => void;
+  /**
+   * Always-rendered Save button; hidden when omitted (plain table tabs).
+   * Receives the editor's current SQL so the parent can save from any editor.
+   */
+  onSave?: (sql: string) => void;
   /** Called on every content change so the parent can track the draft. */
   onSqlChange?: (sql: string) => void;
 }
+
+/** macOS browsers report the Cmd (Meta) modifier; everything else uses Ctrl. */
+const IS_MAC =
+  typeof navigator !== "undefined" &&
+  (/Mac|iPod|iPhone|iPad/.test(navigator.platform ?? "") || /Mac/.test(navigator.userAgent ?? ""));
+const SAVE_LABEL = IS_MAC ? "Save (⌘ + S)" : "Save (Ctrl+S)";
 
 export function SqlEditor({ initialSql, isEditable = true, onRun, error, onSave, onSqlChange }: SqlEditorProps) {
   const [value, setValue] = useState(initialSql);
@@ -24,6 +33,8 @@ export function SqlEditor({ initialSql, isEditable = true, onRun, error, onSave,
   onRunRef.current = onRun;
   const onSqlChangeRef = useRef(onSqlChange);
   onSqlChangeRef.current = onSqlChange;
+  const onSaveRef = useRef<(sql: string) => void>(() => {});
+  onSaveRef.current = (sql) => onSave?.(sql);
 
   // Create the editor once on mount.
   useEffect(() => {
@@ -62,10 +73,13 @@ export function SqlEditor({ initialSql, isEditable = true, onRun, error, onSave,
       onSqlChangeRef.current?.(text);
     });
 
-    // Ctrl/Cmd+Enter runs the query; Shift+Alt+F formats.
+    // Ctrl/Cmd+Enter runs the query; Shift+Alt+F formats; Ctrl/Cmd+S saves.
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
       const sql = editor.getValue();
       if (sql.trim()) onRunRef.current(sql.trim());
+    });
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+      onSaveRef.current(editor.getValue());
     });
     editor.addCommand(
       monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF,
@@ -130,26 +144,26 @@ export function SqlEditor({ initialSql, isEditable = true, onRun, error, onSave,
         <div className="flex-1 min-w-0">
           <div ref={containerRef} data-testid="sql-editor" className="h-[180px] w-full" />
         </div>
-        <div className="flex flex-col justify-between shrink-0 border-l border-gray-200">
+        <div className="flex flex-col gap-2 p-2 shrink-0 border-l border-gray-200">
           <button
             onClick={() => void handleFormat()}
             title="Format SQL (Shift+Alt+F)"
-            className="px-4 py-2 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors"
+            className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 hover:border-gray-400 active:bg-gray-100 active:scale-[0.98] transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
           >
             Format
           </button>
           {onSave && (
             <button
-              onClick={onSave}
-              title="Save this SQL as a view"
-              className="px-4 py-2 text-xs font-medium text-blue-700 hover:bg-blue-50 transition-colors border-t border-gray-200"
+              onClick={() => onSave?.(value)}
+              title={SAVE_LABEL}
+              className="px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md shadow-sm hover:bg-blue-100 hover:border-blue-300 active:bg-blue-100 active:scale-[0.98] transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
             >
-              Save
+              {SAVE_LABEL}
             </button>
           )}
           <button
             onClick={handleRun}
-            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-colors"
+            className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-md shadow-sm active:scale-[0.98] transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
           >
             Run
           </button>

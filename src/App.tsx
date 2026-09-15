@@ -11,6 +11,7 @@ import { SidebarResizer, SIDEBAR_DEFAULT_WIDTH } from "./components/SidebarResiz
 import { TabBar } from "./components/TabBar";
 import { NameModal } from "./components/NameModal";
 import { SaveOptionsModal } from "./components/SaveOptionsModal";
+import { NoProjectModal } from "./components/NoProjectModal";
 import type { ProjectsSectionMode } from "./components/ProjectsSection";
 import {
   listProjects,
@@ -34,6 +35,8 @@ import { RecordDrawer } from "./components/RecordDrawer";
 import { buildSchemaCatalog, setSchemaCatalog } from "./lib/sqlCompletions";
 import { initWebMcpTools, setWebMcpController, buildPagedQuery } from "./lib/webmcp";
 import { aiClient } from "./lib/aiClient";
+import { suggestViewName } from "./lib/aiViewName";
+import { useAiStatus } from "./hooks/useAiStatus";
 import { AiStatusPill } from "./components/AiStatusPill";
 import { DocsPage } from "./components/DocsPage";
 import { AboutPage } from "./components/AboutPage";
@@ -150,10 +153,19 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
   // Browser-only SPA: reading localStorage lazily at first render is safe.
   // After every mutation we re-read with setProjects(listProjects()).
 
-  // Modals: create-project, save-existing-view options, name-new-view.
+  // Modals: create-project, save-existing-view options, name-new-view,
+  // and the "no project open" prompt shown when saving without one.
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [saveModalOpen, setSaveModalOpen] = useState(false);
   const [viewNameModalOpen, setViewNameModalOpen] = useState(false);
+  const [noProjectModalOpen, setNoProjectModalOpen] = useState(false);
+  // SQL the pending save came from — the Save button exists on every SQL
+  // editor (view editor and plain data tabs), so this pins the source text.
+  const [saveEditorSql, setSaveEditorSql] = useState<string | null>(null);
+  // AI-suggested view name, filled in while the name modal is open.
+  const [aiSuggestion, setAiSuggestion] = useState("");
+  const { status: aiStatus } = useAiStatus();
+  const aiEnabled = aiStatus === "ready";
 
   // Right-side drawer showing one record in form view.
   const [recordDrawer, setRecordDrawer] = useState<{
@@ -353,6 +365,7 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
         setTabs((prev) => [...prev, newTab]);
         setActiveTabId(id);
         setViewEditorOpen(false); // table click takes over the main pane
+        setActiveViewId(null); // and deselects any open view
         void runTableQuery(id, sql).finally(() => setBusy(null));
       } catch (err) {
         console.error("Failed to open data tab:", err);
@@ -386,6 +399,7 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
         setTabs((prev) => [...prev, newTab]);
         setActiveTabId(structureId);
         setViewEditorOpen(false); // table click takes over the main pane
+        setActiveViewId(null); // and deselects any open view
 
         const columnsRes = await dbClient.query(`PRAGMA table_info("${tableName}")`);
         const indexListRes = await dbClient.query(`PRAGMA index_list("${tableName}")`);
@@ -590,13 +604,26 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
         setProjectModalOpen(false);
         setProjects(listProjects());
         openProjectViews(project.id);
+        // Continue a save that started with no project open: load the pending
+        // SQL into the freshly opened project's view editor and let the user
+        // name it right away.
+        if (saveEditorSql != null) {
+          setActiveViewId(null);
+          setViewEditorOpen(true);
+          setViewSql(saveEditorSql);
+          setViewSavedSql("");
+          setViewResult(null);
+          setAiSuggestion("");
+          setViewNameModalOpen(true);
+          setSaveEditorSql(null);
+        }
         showToast("success", `Project "${project.name}" created`);
       } catch (err) {
         console.error("Failed to create project:", err);
         showToast("error", `Failed to create project: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [openProjectViews, showToast]
+    [openProjectViews, saveEditorSql, showToast]
   );
 
   const handleDeleteProject = useCallback(
@@ -654,41 +681,66 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
     setViewResult(null);
   }, []);
 
-  /** Save button under Format: options when updating, name modal otherwise. */
-  const handleSaveViewClicked = useCallback(() => {
-    if (!openProjectId) return;
-    if (!viewSql.trim()) {
-      showToast("info", "Write some SQL first");
-      return;
-    }
-    if (activeViewId != null) {
-      setSaveModalOpen(true);
-    } else {
-      setViewNameModalOpen(true);
-    }
-  }, [openProjectId, viewSql, activeViewId, showToast]);
+  /**
+   * Save button / Ctrl+Cmd+S from any SQL editor. No project open → invite to
+   * create one; existing view selected → options modal; otherwise name modal.
+   */
+  const handleSaveViewClicked = useCallback(
+    (sql: string) => {
+      if (!sql.trim()) {
+        showToast("info", "Write some SQL first");
+        return;
+      }
+      setSaveEditorSql(sql);
+      if (!openProjectId) {
+        setNoProjectModalOpen(true);
+      } else if (activeViewId != null) {
+        setSaveModalOpen(true);
+      } else {
+        setAiSuggestion("");
+        setViewNameModalOpen(true);
+      }
+    },
+    [openProjectId, activeViewId, showToast]
+  );
 
-  /** SaveOptionsModal → Save: overwrite the existing view in place. */
-  const handleSaveExistingView = useCallback(() => {
-    if (!openProjectId || activeViewId == null) return;
-    try {
-      upsertView(openProjectId, activeViewId, "", viewSql);
-      // Re-read for the (possibly unchanged) name shown in the UI.
-      const name = findView(openProjectId, activeViewId)?.view.name ?? "view";
-      setSaveModalOpen(false);
-      setProjects(listProjects());
-      setViewSavedSql(viewSql);
-      showToast("success", `View "${name}" saved`);
-    } catch (err) {
-      console.error("Failed to save view:", err);
-      showToast("error", `Failed to save view: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }, [openProjectId, activeViewId, viewSql, showToast]);
+  // While the name modal is open, ask the local AI for a view-name suggestion
+  // (only when the model is ready — otherwise the field stays empty).
+  useEffect(() => {
+    if (!viewNameModalOpen || !aiEnabled) return;
+    let cancelled = false;
+    void suggestViewName(saveEditorSql ?? viewSql).then((name) => {
+      if (!cancelled) setAiSuggestion(name);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewNameModalOpen, aiEnabled, saveEditorSql, viewSql]);
 
-  /** SaveOptionsModal → Create a new one → same name modal as a new view. */
+  /** SaveOptionsModal → Save: update the existing view (name + SQL) in place. */
+  const handleSaveExistingView = useCallback(
+    (name: string) => {
+      if (!openProjectId || activeViewId == null) return;
+      try {
+        upsertView(openProjectId, activeViewId, name, saveEditorSql ?? viewSql);
+        setSaveModalOpen(false);
+        setSaveEditorSql(null);
+        setProjects(listProjects());
+        setViewSavedSql(saveEditorSql ?? viewSql);
+        showToast("success", `View "${name}" saved`);
+      } catch (err) {
+        console.error("Failed to save view:", err);
+        showToast("error", `Failed to save view: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [openProjectId, activeViewId, saveEditorSql, viewSql, showToast]
+  );
+
+  /** SaveOptionsModal → Create new view → same name modal as a new view. */
   const handleSaveAsNewView = useCallback(() => {
     setSaveModalOpen(false);
     setActiveViewId(null); // save as a brand-new view, don't touch the existing one
+    setAiSuggestion("");
     setViewNameModalOpen(true);
   }, []);
 
@@ -696,19 +748,25 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
   const handleSaveNamedView = useCallback(
     (name: string) => {
       if (!openProjectId) return;
+      const sql = saveEditorSql ?? viewSql;
       try {
-        const saved = upsertView(openProjectId, activeViewId, name, viewSql);
+        const saved = upsertView(openProjectId, activeViewId, name, sql);
         setViewNameModalOpen(false);
+        setSaveEditorSql(null);
         setProjects(listProjects());
-        setActiveViewId(saved.id);
-        setViewSavedSql(viewSql);
+        // Only the view editor tracks selection/saved state — a save from a
+        // plain data tab leaves that tab as-is.
+        if (viewEditorOpen) {
+          setActiveViewId(saved.id);
+          setViewSavedSql(sql);
+        }
         showToast("success", `View "${saved.name}" saved`);
       } catch (err) {
         console.error("Failed to save view:", err);
         showToast("error", `Failed to save view: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [openProjectId, activeViewId, viewSql, showToast]
+    [openProjectId, activeViewId, saveEditorSql, viewSql, viewEditorOpen, showToast]
   );
 
   const handleDeleteView = useCallback(
@@ -962,6 +1020,7 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
                     initialSql={activeTab.sql ?? ""}
                     isEditable
                     onRun={(sql) => void handleRunQuery(activeTab.id, sql)}
+                    onSave={handleSaveViewClicked}
                     error={tabResults[activeTab.id]?.error ?? null}
                   />
                 </Suspense>
@@ -1007,30 +1066,55 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
         />
       )}
 
-      {/* Save-existing-view options: update in place or fork as a new view. */}
-      {saveModalOpen && activeView && (
-        <SaveOptionsModal
-          viewName={activeView.name}
-          projectViewCount={projects.find((p) => p.id === openProjectId)?.views.length ?? 0}
-          onSave={handleSaveExistingView}
-          onCreateNew={handleSaveAsNewView}
-          onCancel={() => setSaveModalOpen(false)}
+      {/* Saving with no project open: invite the user to create one. */}
+      {noProjectModalOpen && (
+        <NoProjectModal
+          onCreateProject={() => {
+            setNoProjectModalOpen(false);
+            setProjectModalOpen(true);
+          }}
+          onCancel={() => {
+            setNoProjectModalOpen(false);
+            setSaveEditorSql(null);
+          }}
         />
       )}
 
-      {/* Name-a-view modal: new views and “Create a new one” from the save modal. */}
+      {/* Save-existing-view options: rename/update in place or fork as a new view. */}
+      {saveModalOpen && activeView && openProjectId && (
+        <SaveOptionsModal
+          viewName={activeView.name}
+          validate={(name) =>
+            viewNameExists(openProjectId, name, activeViewId ?? undefined)
+              ? `A view named “${name}” already exists in this project`
+              : null
+          }
+          onSave={handleSaveExistingView}
+          onCreateNew={handleSaveAsNewView}
+          onCancel={() => {
+            setSaveModalOpen(false);
+            setSaveEditorSql(null);
+          }}
+        />
+      )}
+
+      {/* Name-a-view modal: new views and “Create new view” from the save modal. */}
       {viewNameModalOpen && openProjectId && (
         <NameModal
           title="Save view"
           description="Name this SQL query — it will be saved in the current project."
           confirmLabel="Save"
+          suggestion={aiSuggestion}
           validate={(name) =>
             viewNameExists(openProjectId, name, activeViewId ?? undefined)
               ? `A view named “${name}” already exists in this project`
               : null
           }
           onConfirm={handleSaveNamedView}
-          onCancel={() => setViewNameModalOpen(false)}
+          onCancel={() => {
+            setViewNameModalOpen(false);
+            setSaveEditorSql(null);
+          }}
         />
       )}
 

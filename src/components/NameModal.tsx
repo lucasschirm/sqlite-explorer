@@ -7,6 +7,11 @@ export interface NameModalProps {
   /** Prefill value for the input. */
   initialValue?: string;
   confirmLabel?: string;
+  /**
+   * Asynchronous name suggestion (e.g. AI-generated). Prefills the input
+   * unless the user has already typed something.
+   */
+  suggestion?: string;
   /** Validate the trimmed name; return an error message or null when valid. */
   validate?: (name: string) => string | null;
   onConfirm: (name: string) => void;
@@ -22,6 +27,7 @@ export function NameModal({
   description,
   initialValue = "",
   confirmLabel = "Save",
+  suggestion,
   validate,
   onConfirm,
   onCancel,
@@ -29,6 +35,15 @@ export function NameModal({
   const [name, setName] = useState(initialValue);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Once the user types, the async suggestion must not clobber their text.
+  const touchedRef = useRef(false);
+
+  // Late-arriving suggestion prefills the field (until the user has typed).
+  useEffect(() => {
+    if (!suggestion || touchedRef.current) return;
+    setName(suggestion);
+    setError(null);
+  }, [suggestion]);
 
   // Escape cancels; focus the input after the first paint.
   useEffect(() => {
@@ -76,6 +91,7 @@ export function NameModal({
           type="text"
           value={name}
           onChange={(e) => {
+            touchedRef.current = true;
             setName(e.target.value);
             if (error) setError(null);
           }}
