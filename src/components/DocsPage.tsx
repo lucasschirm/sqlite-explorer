@@ -153,7 +153,7 @@ export function DocsPage() {
         <p>
           The editor also offers Copilot-style <strong>ghost-text completions</strong> powered by
           Qwen2.5-Coder-1.5B running entirely in your browser via WebLLM — no server, no API key,
-          and the model weights are downloaded from this site, not Hugging Face.
+          and the model weights are downloaded from a dedicated CDN, not Hugging Face.
         </p>
         <p>
           The AI preloads in the background as soon as the app opens; a small status pill in the

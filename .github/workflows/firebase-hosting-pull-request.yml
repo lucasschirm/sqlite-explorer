@@ -33,3 +33,4 @@ jobs:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SQLITE_EXPLORER_EE0D4 }}
           projectId: sqlite-explorer-ee0d4
+          target: sqlite-explorer

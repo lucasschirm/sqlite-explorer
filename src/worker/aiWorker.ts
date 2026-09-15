@@ -12,7 +12,7 @@ import * as webllm from "@mlc-ai/web-llm";
 const MODEL_ID = "Qwen2.5-Coder-1.5B-Instruct-q4f16_1-MLC-local";
 // WebLLM's cleanModelUrl() appends `resolve/main/` unless the URL already has
 // it (HuggingFace layout) — the CDN model dir mirrors that structure.
-const MODEL_DIR = "https://cdn.lucasschirm.com/models/qwen25-coder-1.5b/resolve/main";
+const MODEL_DIR = "https://cdn.lucasschirm.com/qwen25-coder-1.5b/resolve/main";
 const MODEL_LIB = "Qwen2-1.5B-Instruct-q4f16_1_cs1k-webgpu.wasm";
 
 const appConfig: webllm.AppConfig = {

@@ -126,7 +126,8 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
     initWebMcpTools();
   }, []);
 
-  // Preload the local SQL model (WebLLM) in the background at boot — before
+  // Preload the local SQL model (WebLLM, served from cdn.lucasschirm.com) in
+  // the background at boot — before
   // any database is opened. Fire-and-forget: downloads are cached by the
   // browser, failures only dim the status pill, nothing blocks the UI.
   // Skipped in CLI mode: local.html boots straight into an open database.
