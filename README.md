@@ -4,6 +4,15 @@
 
 Also available as a CLI: `slitex mydata.db` opens any local database in the viewer straight from your terminal, no drop zone required.
 
+## Installation (CLI)
+
+```sh
+npm install @lucasschirm/sqlite-explorer -g
+slitex mydata.db                    # serves the viewer at http://localhost:3000 and opens it
+slitex mydata.db --port 8080        # custom port
+slitex mydata.db --no-open          # don't launch the browser automatically
+```
+
 Built with React + Vite + Tailwind CSS + wa-sqlite (WebAssembly SQLite) + @tanstack/react-virtual.
 
 ## Features
@@ -11,6 +20,7 @@ Built with React + Vite + Tailwind CSS + wa-sqlite (WebAssembly SQLite) + @tanst
 - **Drop anywhere** — drag a SQLite file onto the window, or click to browse
 - **Multi-gigabyte files** — databases of any size open instantly; pages stream from disk on demand and the whole file is never loaded into memory
 - **Demo database** — "Load demo database" button loads a bundled sample DB (3 tables with customers, products, orders)
+- **Database handover from other sites** — a host page can push an in-memory SQLite database straight into the explorer with one `postMessage` (see [Database handover](#database-handover-from-another-site-postmessage))
 - **Tables sidebar** — row counts per table, click to open a Data tab, hover for the Structure shortcut
 - **Data tab** — Monaco SQL editor (defaults to `SELECT * FROM <table> LIMIT 100`) with schema-aware autocomplete (tables, `table.` → columns), SQL formatting (button or Shift+Alt+F), Run button or Ctrl/Cmd+Enter, virtualized read-only grid
 - **Structure tab** — columns grid (name, type, notnull, default, pk) and indexes grid (name, unique, origin, columns)
@@ -19,14 +29,46 @@ Built with React + Vite + Tailwind CSS + wa-sqlite (WebAssembly SQLite) + @tanst
 - **WebMCP agent tools** — `list_tables`, `view_table` and `select_table` are exposed via `document.modelContext` (WebMCP polyfill), so AI agents can browse the database and drive the UI
 - **Docs & About pages** — in-app documentation (`/docs`) with real screenshots of every feature, and an About page (`/about`) covering privacy and architecture; both linked from the app header and prerendered to static HTML at build time
 
-## CLI: `slitex <file>`
+## Database handover from another site (postMessage)
+
+Another site can hand a database it holds **in memory** (or in any browser storage — an IndexedDB blob, a `fetch()` in flight, an in-browser WASM SQLite export) straight to the explorer. The database travels as a `Blob`, is transferred by reference (zero copy, multi-GB friendly), and the explorer opens it exactly like a dropped file.
+
+The sender embeds the explorer in an iframe or popup and posts one message:
+
+```js
+const EXPLORER_ORIGIN = "https://<your-explorer-host>"; // exact origin, never "*"
+
+const iframe = document.createElement("iframe");
+iframe.src = `${EXPLORER_ORIGIN}/`;
+await new Promise((resolve) => iframe.addEventListener("load", resolve, { once: true }));
+document.body.appendChild(iframe);
+
+iframe.contentWindow.postMessage(
+  { type: "sqlite-explorer:handover", name: "report.sqlite", blob: dbBlob },
+  EXPLORER_ORIGIN
+);
+```
+
+The explorer validates the message (exact sender origin, shape, and the 16-byte SQLite file header) and replies on the same channel:
+
+- `sqlite-explorer:handover:ack` — the database is open in the explorer UI
+- `sqlite-explorer:handover:nack` with a `reason` — rejected (unknown origin, wrong shape, or not a SQLite file)
+
+By default only the explorer's own origin may hand over databases. To allow partner sites, list them in the `handoverOrigins` query parameter when loading the explorer (full URLs or bare origins, comma-separated):
+
+```
+https://explorer.example/?handoverOrigins=https://partner.example,https://other.example
+```
+
+A complete runnable sender — it builds a SQLite database in memory with sql.js, embeds the explorer, performs the handshake and prints the reply — lives in [`examples/sqlite-handover`](examples/sqlite-handover). Try it locally:
 
 ```sh
-npm install -g slitex
-slitex mydata.db                    # serves the viewer at http://localhost:3000 and opens it
-slitex mydata.db --port 8080        # custom port
-slitex mydata.db --no-open          # don't launch the browser automatically
+bun run dev                                  # explorer at http://localhost:5173
+# then serve the example and open it, e.g.:
+npx serve examples/sqlite-handover           # http://localhost:3000
 ```
+
+## CLI: `slitex <file>`
 
 The command starts a small local Fastify server (bound to `127.0.0.1`) that serves the prebuilt viewer (`local.html`) and streams the database over HTTP Range requests. The UI's SQLite worker fetches only the 4 KiB pages a query touches — exactly like the drop-zone path, multi-gigabyte files open instantly and are never loaded into memory. Nothing leaves your machine; stop with `Ctrl+C`.
 
@@ -102,7 +144,7 @@ All tools are read-only. Errors are returned as the raw SQLite error text (e.g. 
 
 The Monaco editor offers Copilot-style ghost-text SQL completions powered by **Qwen2.5-Coder-1.5B** running fully in-browser via [WebLLM](https://github.com/mlc-ai/web-llm) — no server, no Hugging Face calls at runtime.
 
-- **Model hosting**: weights are fetched with `bun run model:fetch` into `public/models/qwen25-coder-1.5b/` (gitignored, ~845 MB) and served from the app's own origin. WebLLM's `cleanModelUrl()` appends `resolve/main/` unless the URL already has it, so the directory **must** mirror the HuggingFace layout: `public/models/qwen25-coder-1.5b/resolve/main/`.
+- **Model hosting**: weights are fetched with `bun run model:fetch` into `public/models/qwen25-coder-1.5b/` (gitignored, ~845 MB) and served from the dedicated CDN Firebase site (`cdn-b89da`, https://cdn.lucasschirm.com). The CDN is deployed by CI only when `scripts/fetch-model.mjs` changes. WebLLM's `cleanModelUrl()` appends `resolve/main/` unless the URL already has it, so the CDN directory **must** mirror the HuggingFace layout: `qwen25-coder-1.5b/resolve/main/`.
 - **Inference worker**: `src/worker/aiWorker.ts` hosts the MLCEngine so downloads, GPU init and generation never touch the UI thread. The model is preloaded at app boot (fire-and-forget, browser-cached across visits).
 - **Graceful degradation**: the status pill in the header shows loading progress; on machines without WebGPU (or any init failure) AI silently stays dormant — the app never blocks or breaks. Verify the pipeline with `node scripts/check-ai-pipeline.mjs` against a running preview (on a WebGPU machine it confirms the model reaches `ready`).
 

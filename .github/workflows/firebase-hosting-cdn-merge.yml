@@ -1,0 +1,43 @@
+# Deploys the model weights to the CDN Firebase Hosting site (cdn-b89da,
+# https://cdn.lucasschirm.com). Runs only when the model fetch script changes,
+# so the ~845 MB upload happens only when the model set actually changes.
+name: Deploy model CDN on merge
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "scripts/fetch-model.mjs"
+
+jobs:
+  deploy_cdn:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # public/models is gitignored (~845 MB). Cached between runs — on a cache
+      # hit model:fetch skips every file. Upload side is deduped by Firebase
+      # Hosting (hash-checked, unchanged files are not re-uploaded).
+      - name: Restore local AI model cache
+        uses: actions/cache@v4
+        with:
+          path: public/models
+          key: webllm-qwen25-1.5b-q4f16_1-v1
+          restore-keys: webllm-qwen25-1.5b-q4f16_1-
+
+      - name: Fetch local AI model
+        run: bun run model:fetch
+
+      - uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SQLITE_EXPLORER_EE0D4 }}
+          channelId: live
+          projectId: sqlite-explorer-ee0d4
+          target: cdn

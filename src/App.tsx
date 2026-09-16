@@ -1,7 +1,8 @@
 import { useState, useCallback, useRef, useEffect, Suspense, lazy } from "react";
 import type { TableInfo, Tab, ColumnInfo, QueryResult, CellValue } from "./types";
 import { formatCellValue } from "./types";
-import { peekFileBytes } from "./lib/readFile";
+import { peekFileBytes, looksLikeSqlite } from "./lib/readFile";
+import { initHandoverReceiver, allowedOriginsFromLocation } from "./lib/handover";
 import { dbClient, type OpenProgress } from "./lib/dbClient";
 import { ToastProvider, useToast } from "./components/Toast";
 import { LoadingOverlay } from "./components/LoadingOverlay";
@@ -56,18 +57,6 @@ function nextSqlTitle() {
   return `SQL ${++sqlTabCounter}`;
 }
 
-const SQLITE_HEADER = "SQLite format 3\u0000";
-
-function looksLikeSqlite(data: ArrayBuffer | Uint8Array): boolean {
-  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
-  if (bytes.length < 16) return false;
-  const expected = SQLITE_HEADER.split("").map((c) => c.charCodeAt(0));
-  for (let i = 0; i < 15; i++) {
-    if (bytes[i] !== expected[i]) return false;
-  }
-  return true;
-}
-
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -81,6 +70,10 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
   // same tick would otherwise start two concurrent loads of the same file).
   const busyRef = useRef(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  // Latest openDatabase closure, readable from the stable handover listener.
+  const openDatabaseRef = useRef<
+    ((opener: (onProgress: (p: OpenProgress) => void) => Promise<TableInfo[]>, fname: string) => Promise<void>) | null
+  >(null);
   const [hasDb, setHasDb] = useState(false);
   const [filename, setFilename] = useState<string | null>(null);
 
@@ -156,7 +149,8 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
     initWebMcpTools();
   }, []);
 
-  // Preload the local SQL model (WebLLM) in the background at boot — before
+  // Preload the local SQL model (WebLLM, served from cdn.lucasschirm.com) in
+  // the background at boot — before
   // any database is opened. Fire-and-forget: downloads are cached by the
   // browser, failures only dim the status pill, nothing blocks the UI.
   // Skipped in CLI mode: local.html boots straight into an open database.
@@ -199,10 +193,12 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
           "error",
           `Failed to open database: ${err instanceof Error ? err.message : String(err)}`
         );
-      }
-    },
-    [showToast]
-  );
+      }  }, [showToast]);
+
+  // Keep the handover listener's view of openDatabase current.
+  useEffect(() => {
+    openDatabaseRef.current = openDatabase;
+  });
 
   // CLI mode: the slitex server pre-opens a database — boot straight into
   // the explorer (the drop zone only appears if the open fails).
@@ -227,6 +223,18 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
       cancelled = true;
     };
   }, [cliMode, openDatabase, showToast]);
+
+  // Accept database handovers from other windows (popups/iframes of host
+  // pages — see examples/sqlite-handover). Mounted once; the allowed origins
+  // are parsed from the URL at boot and the callback goes through a ref so a
+  // changing openDatabase identity never re-registers the listener.
+  useEffect(() => {
+    return initHandoverReceiver((blob, name) => {
+      const open = openDatabaseRef.current;
+      if (!open) return;
+      void open(() => dbClient.open(blob, name), name);
+    }, { allowedOrigins: allowedOriginsFromLocation() });
+  }, []);
 
   // Handle file selection/drop
   const handleFilePicked = useCallback(
