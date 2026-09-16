@@ -17,7 +17,7 @@ Built with React + Vite + Tailwind CSS + wa-sqlite (WebAssembly SQLite) + @tanst
 - **Record tab** — double-click any row to open a form view with type-aware read-only fields
 - **Feedback everywhere** — busy overlays for actions, toast notifications, `console.error` for failures
 - **WebMCP agent tools** — `list_tables`, `view_table` and `select_table` are exposed via `document.modelContext` (WebMCP polyfill), so AI agents can browse the database and drive the UI
-- **Docs & About pages** — in-app documentation (`#/docs`) with real screenshots of every feature, and an About page (`#/about`) covering privacy and architecture; both linked from the app header
+- **Docs & About pages** — in-app documentation (`/docs`) with real screenshots of every feature, and an About page (`/about`) covering privacy and architecture; both linked from the app header and prerendered to static HTML at build time
 
 ## CLI: `slitex <file>`
 
@@ -47,9 +47,18 @@ bun run dev         # start dev server
 
 The site entry (`index.html`) is the public drop-zone app. The CLI entry (`local.html`) is the same app in `cliMode`: it auto-opens the database exposed by the slitex server via `/api/boot` and renders the explorer directly.
 
+## Static-site generation
+
+The `/docs` and `/about` pages (plus the `/` landing shell) are prerendered to static HTML at build time, so crawlers and no-JS visitors get real content instead of an empty `<div id="root">`:
+
+- `src/prerender.tsx` renders each route with `renderToStaticMarkup` (Node-side only; define per-route titles/descriptions here).
+- `scripts/prerender.mjs` runs automatically after `vite build` (see the `build` script): it bundles the entry with an SSR build, injects the markup into the template's `#root`, and writes `dist/index.html`, `dist/docs/index.html` and `dist/about/index.html`.
+- `src/main.tsx` hydrates the prerendered markup on the client, and redirects the legacy hash URLs (`#/docs`, `#/docs?<anchor>`, `#/about`) to the clean paths.
+- `firebase.json` rewrites `/docs` and `/about` to their static files (and everything else to the app shell).
+
 ## Docs page screenshots
 
-The `#/docs` page embeds real screenshots under `public/screenshots/`, captured from the running app with Playwright. To regenerate them after a UI change:
+The `/docs` page embeds real screenshots under `public/screenshots/`, captured from the running app with Playwright. To regenerate them after a UI change:
 
 ```sh
 bun run build && (bun run preview &) && node scripts/capture-screenshots.mjs

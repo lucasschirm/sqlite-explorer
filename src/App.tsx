@@ -39,50 +39,17 @@ import { aiClient } from "./lib/aiClient";
 import { suggestViewName } from "./lib/aiViewName";
 import { useAiStatus } from "./hooks/useAiStatus";
 import { AiStatusPill } from "./components/AiStatusPill";
-import { DocsPage } from "./components/DocsPage";
-import { AboutPage } from "./components/AboutPage";
 import { assetUrl } from "./lib/assetUrl";
+import { siteUrl } from "./lib/siteUrl";
 
 let tabIdCounter = 0;
 function nextTabId() {
   return `tab-${++tabIdCounter}`;
 }
 
-// Minimal hash routing: "" (app), "#/docs" (documentation), "#/about".
-// Docs anchors look like "#/docs?structure-tab" — hashchange re-scrolls.
-type Route = { page: "app" | "docs" | "about"; anchor: string | null };
-function parseHash(): Route {
-  const hash = window.location.hash;
-  if (hash.startsWith("#/docs")) {
-    const anchor = hash.startsWith("#/docs?") ? hash.slice("#/docs?".length) : null;
-    return { page: "docs", anchor };
-  }
-  if (hash.startsWith("#/about")) return { page: "about", anchor: null };
-  return { page: "app", anchor: null };
-}
-
-function useHashRoute(): Route {
-  const [route, setRoute] = useState<Route>(() => parseHash());
-  useEffect(() => {
-    const onHashChange = () => {
-      setRoute(parseHash());
-      const { page, anchor } = parseHash();
-      if (page === "docs" && anchor) {
-        // scrollIntoView walks up to the nearest scrollable ancestor (the
-        // page's main container — the window itself is overflow:hidden).
-        requestAnimationFrame(() => {
-          document.getElementById(anchor)?.scrollIntoView({ block: "start" });
-        });
-      } else {
-        document.getElementById("page-scroll")?.scrollTo({ top: 0 });
-        window.scrollTo(0, 0);
-      }
-    };
-    window.addEventListener("hashchange", onHashChange);
-    return () => window.removeEventListener("hashchange", onHashChange);
-  }, []);
-  return route;
-}
+// Legacy hash URLs (#/docs, #/docs?<anchor>, #/about) redirect to the real
+// /docs and /about pages — prerendered since the SSG conversion — preserving
+// deep-link anchors as a query param.
 
 let sqlTabCounter = 0;
 function nextSqlTitle() {
@@ -108,15 +75,24 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-function App({ cliMode = false }: { cliMode?: boolean }) {
+function Explorer({ cliMode = false }: { cliMode?: boolean }) {
   const { showToast } = useToast();
-
   // Synchronous re-entry guard (state updates are async, so two drops in the
   // same tick would otherwise start two concurrent loads of the same file).
   const busyRef = useRef(false);
   const bodyRef = useRef<HTMLDivElement>(null);
   const [hasDb, setHasDb] = useState(false);
   const [filename, setFilename] = useState<string | null>(null);
+
+  // Legacy hash URLs (#/docs, #/docs?<anchor>, #/about) redirect to the real
+  // /docs and /about pages, preserving deep-link anchors.
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (!hash.startsWith("#/docs") && !hash.startsWith("#/about")) return;
+    const target = hash.startsWith("#/docs") ? "/docs" : "/about";
+    const anchor = hash.startsWith("#/docs?") ? hash.slice("#/docs?".length) : null;
+    window.location.replace(anchor ? `${target}?${anchor}` : target);
+  }, []);
 
   const [tables, setTables] = useState<TableInfo[]>([]);
   const [tabs, setTabs] = useState<Tab[]>([]);
@@ -900,8 +876,8 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
           <span className="text-lg">🗄️</span>
           <h1 className="text-sm font-semibold">SQLite Explorer</h1>
           <nav className="ml-auto flex items-center gap-4 text-xs">
-            <a href="#/docs" className="text-gray-300 hover:text-white transition-colors">Docs</a>
-            <a href="#/about" className="text-gray-300 hover:text-white transition-colors">About</a>
+            <a href={siteUrl("/docs")} className="text-gray-300 hover:text-white transition-colors">Docs</a>
+            <a href={siteUrl("/about")} className="text-gray-300 hover:text-white transition-colors">About</a>
           </nav>
         </header>
         <FileDropZone onPickFile={handleFilePicked} isLoading={busy != null} onDemo={handleLoadDemo} />
@@ -922,8 +898,8 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
         <h1 className="text-sm font-semibold">SQLite Explorer</h1>
         {!cliMode && <AiStatusPill />}
         <nav className="flex items-center gap-4 text-xs">
-          <a href="#/docs" className="text-gray-300 hover:text-white transition-colors">Docs</a>
-          <a href="#/about" className="text-gray-300 hover:text-white transition-colors">About</a>
+          <a href={siteUrl("/docs")} className="text-gray-300 hover:text-white transition-colors">Docs</a>
+          <a href={siteUrl("/about")} className="text-gray-300 hover:text-white transition-colors">About</a>
         </nav>
         {filename && (
           <>
@@ -1126,50 +1102,10 @@ function App({ cliMode = false }: { cliMode?: boolean }) {
 
 
 
-export default function WrappedApp({ cliMode = false }: { cliMode?: boolean }) {
-  const route = useHashRoute();
-
-  if (route.page === "docs" || route.page === "about") {
-    return (
-      <div className="h-screen flex flex-col bg-white">
-        <header className="px-6 py-3 bg-gray-900 text-white flex items-center gap-3 shrink-0 z-10">
-          <a
-            href="#/"
-            className="flex items-center gap-3 text-white hover:opacity-90 transition-opacity"
-          >
-            <span className="text-lg">🗄️</span>
-            <h1 className="text-sm font-semibold">SQLite Explorer</h1>
-          </a>
-          <nav className="ml-auto flex items-center gap-4 text-xs">
-            <a
-              href="#/docs"
-              className={`transition-colors ${route.page === "docs" ? "text-white font-semibold" : "text-gray-300 hover:text-white"}`}
-            >
-              Docs
-            </a>
-            <a
-              href="#/about"
-              className={`transition-colors ${route.page === "about" ? "text-white font-semibold" : "text-gray-300 hover:text-white"}`}
-            >
-              About
-            </a>
-            <a
-              href="#/"
-              className="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded transition-colors"
-            >
-              ← Back to app
-            </a>
-          </nav>
-        </header>
-        <main id="page-scroll" className="flex-1 overflow-y-auto min-h-0">
-          {route.page === "docs" ? <DocsPage /> : <AboutPage />}
-        </main>
-      </div>
-    );
-  }
+export default function App({ cliMode = false }: { cliMode?: boolean }) {
   return (
     <ToastProvider>
-      <App cliMode={cliMode} />
+      <Explorer cliMode={cliMode} />
     </ToastProvider>
   );
 }
