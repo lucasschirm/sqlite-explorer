@@ -10,6 +10,14 @@
       ],
       "rewrites": [
         {
+          "source": "/docs",
+          "destination": "/docs/index.html"
+        },
+        {
+          "source": "/about",
+          "destination": "/about/index.html"
+        },
+        {
           "source": "**",
           "destination": "/index.html"
         }

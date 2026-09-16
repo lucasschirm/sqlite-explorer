@@ -30,7 +30,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build && tsc -p tsconfig.cli.json",
+    "build": "tsc -b && vite build && node scripts/prerender.mjs && tsc -p tsconfig.cli.json",
     "lint": "oxlint",
     "preview": "vite preview",
     "cli": "node bin/slitex.js",

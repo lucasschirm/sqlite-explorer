@@ -1,14 +1,46 @@
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import { resolve } from 'node:path'
-import { defineConfig } from 'vite'
+import { existsSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { defineConfig, type Connect, type Plugin } from 'vite'
+
+// /docs and /about only exist as files after the SSG post-build step.
+// Dev: always serve index.html (the app hydrates the static page).
+// Preview: serve the prerendered file when present, else the app shell.
+function staticPageRoutes(distDir: string): Plugin {
+  const devMw: Connect.NextHandleFunction = (req, _res, next) => {
+    const url = (req.url ?? '').split('?')[0]
+    if (url === '/docs' || url === '/about') req.url = '/index.html'
+    next()
+  }
+  const previewMw: Connect.NextHandleFunction = (req, _res, next) => {
+    const url = (req.url ?? '').split('?')[0]
+    if (url === '/docs' || url === '/about') {
+      const prerendered = join(distDir, url.slice(1), 'index.html')
+      req.url = existsSync(prerendered) ? `${url}/index.html` : '/index.html'
+    }
+    next()
+  }
+  return {
+    name: 'static-page-routes',
+    configureServer(server) {
+      server.middlewares.use(devMw)
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(previewMw)
+    },
+  }
+}
 
 // Base path is configurable for GitHub Pages deployments (serves under /<repo>/).
 // Locally and on Freebuff, default '/' works fine.
 const base = process.env.VITE_BASE || '/'
 
-// Multi-page app: index.html is the public website; local.html is the slim
-// entry the `slitex` CLI serves with the database pre-opened.
+// index.html serves the whole site: / boots the client-rendered explorer,
+// while /docs and /about are prerendered to static HTML by the post-build
+// SSG step (scripts/prerender.mjs + src/prerender.tsx) and hydrated by this
+// same entry. local.html is the slim entry the `slitex` CLI serves with the
+// database pre-opened.
 export default defineConfig({
   base,
   appType: 'mpa',
@@ -20,7 +52,7 @@ export default defineConfig({
       },
     },
   },
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), staticPageRoutes(resolve(__dirname, 'dist'))],
   server: {
     host: '0.0.0.0',
     port: Number(process.env.PORT) || 5173,
