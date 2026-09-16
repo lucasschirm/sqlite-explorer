@@ -16,10 +16,13 @@ type StaticPage = "docs" | "about";
 
 function staticPageForPath(pathname: string): StaticPage | null {
   // GitHub Pages deploys serve under VITE_BASE (e.g. /repo/); ignore that
-  // prefix when matching the static routes.
+  // prefix when matching the static routes. Hosts like Firebase Hosting
+  // normalize /docs → /docs/ (301), so the trailing slash must not break
+  // the match — otherwise the explorer boots over the prerendered page.
   const base = (import.meta.env.BASE_URL ?? "/").replace(/\/?$/, "/");
   const path = pathname.startsWith(base) ? `/${pathname.slice(base.length)}` : pathname;
-  return path === "/docs" ? "docs" : path === "/about" ? "about" : null;
+  const normalized = path.replace(/\/+$/, "") || "/";
+  return normalized === "/docs" ? "docs" : normalized === "/about" ? "about" : null;
 }
 
 function StaticApp({ page }: { page: StaticPage }) {

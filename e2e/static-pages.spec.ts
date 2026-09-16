@@ -68,6 +68,16 @@ test.describe("Static pages (SSG)", () => {
     await expect(page.getByText("Your data never leaves your machine")).toBeVisible();
   });
 
+  test("trailing-slash URLs hydrate the static page, not the explorer", async ({ page }) => {
+    // Firebase Hosting normalizes /docs → /docs/ (301); the entry must still
+    // recognize the static route instead of booting the explorer over it.
+    const errors = trackConsoleErrors(page).filter((e) => !e.includes("WebGPU") && !e.includes("GPU"));
+    await page.goto("/docs/");
+    await expect(page.getByRole("heading", { name: "Documentation", level: 1 })).toBeVisible();
+    await expect(page.locator("h2")).toHaveCount(9);
+    expect(errors).toEqual([]);
+  });
+
   test("hydrated /docs page is interactive and error-free", async ({ page }) => {
     const errors = trackConsoleErrors(page);
     await page.goto("/docs");
