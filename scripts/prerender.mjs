@@ -8,7 +8,7 @@
 //      between adjacent text nodes, which hydration needs to stay in sync).
 //   3. Inject the markup into the built template's #root and write the pages
 //      as dist/docs/index.html, dist/about/index.html and dist/index.html,
-//      giving every page clean-path URLs (dist/docs.html keeps working too).
+//      giving every page clean-path URLs.
 //   4. Hydration is handled by src/main.tsx on the client.
 //
 // The script deletes .prerender/ when done.

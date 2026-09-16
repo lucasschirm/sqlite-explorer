@@ -58,6 +58,12 @@ export async function startServer(opts: ServeOptions): Promise<string> {
   // Nice default: / → the CLI entry.
   app.get("/", async (_req, reply) => reply.redirect("/local.html"));
 
+  // Prerendered static pages (SSG post-build step) ship inside dist/. The
+  // viewer header links to /docs and /about; serve those files so the links
+  // keep working offline (index: false above disables directory indexing).
+  app.get("/docs", async (_req, reply) => reply.sendFile("docs/index.html"));
+  app.get("/about", async (_req, reply) => reply.sendFile("about/index.html"));
+
   // Boot info for the local.html entry (App cliMode).
   app.get("/api/boot", async () => ({ name: fileName, url: "/api/db" }));
 
