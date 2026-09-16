@@ -1,6 +1,6 @@
 // Read-only VFS that serves SQLite pages directly from a source: either a
 // Blob (a File is a Blob) or an HTTP URL that supports Range requests (used
-// by the `slitex` CLI, which streams the file from a local server). This is
+// by the `sqlitexp` CLI, which streams the file from a local server). This is
 // what makes multi-gigabyte databases work: SQLite reads only the 4 KiB pages
 // a query touches, so a 2.5 GB file uses a few MB of memory instead of
 // requiring the whole file to be loaded into an ArrayBuffer (which browsers
@@ -15,7 +15,7 @@ interface OpenEntry {
   name: string;
   /** Registered source blob (main database file). Null when url is set or for temp files. */
   blob: Blob | null;
-  /** HTTP URL to read via Range requests (slitex CLI mode). Null when blob is set. */
+  /** HTTP URL to read via Range requests (sqlitexp CLI mode). Null when blob is set. */
   url: string | null;
   /** Known byte size for url-backed entries (fetched once via HEAD). */
   fileSize: number | null;
@@ -149,7 +149,7 @@ export class BlobVFS {
   }
 
   /**
-   * Synchronous HTTP range read against the slitex server. Only legal inside
+   * Synchronous HTTP range read against the sqlitexp server. Only legal inside
    * a worker — this is the HTTP equivalent of the FileReaderSync blob read.
    */
   private httpRangeRead(url: string, offset: number, length: number): Uint8Array {

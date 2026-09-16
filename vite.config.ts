@@ -4,18 +4,19 @@ import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { defineConfig, type Connect, type Plugin } from 'vite'
 
-// /docs and /about only exist as files after the SSG post-build step.
+// /docs/* and /about only exist as files after the SSG post-build step.
 // Dev: always serve index.html (the app hydrates the static page).
 // Preview: serve the prerendered file when present, else the app shell.
 function staticPageRoutes(distDir: string): Plugin {
+  const isStatic = (url: string) => url === '/about' || url === '/docs' || url.startsWith('/docs/')
   const devMw: Connect.NextHandleFunction = (req, _res, next) => {
     const url = (req.url ?? '').split('?')[0]
-    if (url === '/docs' || url === '/about') req.url = '/index.html'
+    if (isStatic(url)) req.url = '/index.html'
     next()
   }
   const previewMw: Connect.NextHandleFunction = (req, _res, next) => {
     const url = (req.url ?? '').split('?')[0]
-    if (url === '/docs' || url === '/about') {
+    if (isStatic(url)) {
       const prerendered = join(distDir, url.slice(1), 'index.html')
       req.url = existsSync(prerendered) ? `${url}/index.html` : '/index.html'
     }
@@ -37,9 +38,10 @@ function staticPageRoutes(distDir: string): Plugin {
 const base = process.env.VITE_BASE || '/'
 
 // index.html serves the whole site: / boots the client-rendered explorer,
-// while /docs and /about are prerendered to static HTML by the post-build
-// SSG step (scripts/prerender.mjs + src/prerender.tsx) and hydrated by this
-// same entry. local.html is the slim entry the `slitex` CLI serves with the
+// while every docs page and /about are prerendered to static HTML by the
+// post-build SSG step (scripts/prerender.mjs + src/prerender.tsx) and hydrated
+// by this
+// same entry. local.html is the slim entry the `sqlitexp` CLI serves with the
 // database pre-opened.
 export default defineConfig({
   base,

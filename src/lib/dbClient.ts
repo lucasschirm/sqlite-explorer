@@ -96,7 +96,7 @@ class DbClient {
   }
 
   /**
-   * Open a database served over HTTP with Range support (the slitex CLI
+   * Open a database served over HTTP with Range support (the sqlitexp CLI
    * server). Pages are fetched on demand — like the blob path, the whole
    * file never loads into memory.
    */

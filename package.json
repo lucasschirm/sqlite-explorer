@@ -1,7 +1,7 @@
 {
   "name": "@lucasschirm/sqlite-explorer",
   "version": "0.1.0",
-  "description": "Browser-based SQLite viewer — use it as a website or open local databases straight from the terminal with `slitex <file>`.",
+  "description": "Browser-based SQLite viewer — use it as a website or open local databases straight from the terminal with `sqlitexp <file>`.",
   "type": "module",
   "private": false,
   "license": "MIT",
@@ -10,7 +10,7 @@
     "url": "https://github.com/lucasschirm/sqlite-explorer.git"
   },
   "bin": {
-    "slitex": "./bin/slitex.js"
+    "sqlitexp": "./bin/sqlitexp.js"
   },
   "files": [
     "bin",
@@ -22,7 +22,7 @@
     "node": ">=20"
   },
   "oclif": {
-    "bin": "slitex",
+    "bin": "sqlitexp",
     "commands": {
       "strategy": "single",
       "target": "./cli/commands/index.js"
@@ -33,7 +33,7 @@
     "build": "tsc -b && vite build && node scripts/prerender.mjs && tsc -p tsconfig.cli.json",
     "lint": "oxlint",
     "preview": "vite preview",
-    "cli": "node bin/slitex.js",
+    "cli": "node bin/sqlitexp.js",
     "demo:db": "bun scripts/make-demo-db.js",
     "wal:db": "bun scripts/make-wal-test-db.js",
     "model:fetch": "bun scripts/fetch-model.mjs",

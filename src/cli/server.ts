@@ -1,4 +1,4 @@
-// slitex local server: serves the prebuilt viewer UI (dist/local.html) and
+// sqlitexp local server: serves the prebuilt viewer UI (dist/local.html) and
 // streams the database file to the browser. The UI's SQLite worker reads
 // pages on demand via HTTP Range requests against /api/db, so the whole file
 // is never loaded into memory on either side.
@@ -42,7 +42,7 @@ export async function startServer(opts: ServeOptions): Promise<string> {
   const fileSize = statSync(filePath).size;
 
   // The prebuilt UI ships in dist/ — one level up from the compiled cli/.
-  // (bin/slitex.js → cli/commands/index.js → cli/server.js → ../dist/)
+  // (bin/sqlitexp.js → cli/commands/index.js → cli/server.js → ../dist/)
   // Same layout in dev and in the published package.
   const distDir = resolve(__dirname, "..", "dist");
 
@@ -61,7 +61,16 @@ export async function startServer(opts: ServeOptions): Promise<string> {
   // Prerendered static pages (SSG post-build step) ship inside dist/. The
   // viewer header links to /docs and /about; serve those files so the links
   // keep working offline (index: false above disables directory indexing).
+  // Every docs page is its own static file — /docs/<route>/index.html;
+  // unknown docs routes fall back to the overview.
   app.get("/docs", async (_req, reply) => reply.sendFile("docs/index.html"));
+  app.get("/docs/*", async (req, reply) => {
+    const route = (req.params as { "*": string })["*"]
+      .replace(/\/+$/, "")
+      .replace(/\.html$/, "");
+    const sent = reply.sendFile(`docs/${route}/index.html`);
+    return sent;
+  });
   app.get("/about", async (_req, reply) => reply.sendFile("about/index.html"));
 
   // Boot info for the local.html entry (App cliMode).

@@ -1,16 +1,16 @@
 # SQLite Explorer
 
-(`slitex`, browser-based SQLite database explorer. Drop a `.sqlite`/`.db` file and browse tables, run custom SQL, inspect schema, and view individual records — nothing is uploaded.
+(`sqlitexp`, browser-based SQLite database explorer. Drop a `.sqlite`/`.db` file and browse tables, run custom SQL, inspect schema, and view individual records — nothing is uploaded.
 
-Also available as a CLI: `slitex mydata.db` opens any local database in the viewer straight from your terminal, no drop zone required.
+Also available as a CLI: `sqlitexp mydata.db` opens any local database in the viewer straight from your terminal, no drop zone required.
 
 ## Installation (CLI)
 
 ```sh
 npm install @lucasschirm/sqlite-explorer -g
-slitex mydata.db                    # serves the viewer at http://localhost:3000 and opens it
-slitex mydata.db --port 8080        # custom port
-slitex mydata.db --no-open          # don't launch the browser automatically
+sqlitexp mydata.db                    # serves the viewer at http://localhost:3000 and opens it
+sqlitexp mydata.db --port 8080        # custom port
+sqlitexp mydata.db --no-open          # don't launch the browser automatically
 ```
 
 Built with React + Vite + Tailwind CSS + wa-sqlite (WebAssembly SQLite) + @tanstack/react-virtual.
@@ -68,7 +68,7 @@ bun run dev                                  # explorer at http://localhost:5173
 npx serve examples/sqlite-handover           # http://localhost:3000
 ```
 
-## CLI: `slitex <file>`
+## CLI: `sqlitexp <file>`
 
 The command starts a small local Fastify server (bound to `127.0.0.1`) that serves the prebuilt viewer (`local.html`) and streams the database over HTTP Range requests. The UI's SQLite worker fetches only the 4 KiB pages a query touches — exactly like the drop-zone path, multi-gigabyte files open instantly and are never loaded into memory. Nothing leaves your machine; stop with `Ctrl+C`.
 
@@ -87,16 +87,17 @@ bun run demo:db     # generate public/demo.db (optional — used by the demo but
 bun run dev         # start dev server
 ```
 
-The site entry (`index.html`) is the public drop-zone app. The CLI entry (`local.html`) is the same app in `cliMode`: it auto-opens the database exposed by the slitex server via `/api/boot` and renders the explorer directly.
+The site entry (`index.html`) is the public drop-zone app. The CLI entry (`local.html`) is the same app in `cliMode`: it auto-opens the database exposed by the sqlitexp server via `/api/boot` and renders the explorer directly.
 
 ## Static-site generation
 
-The `/docs` and `/about` pages (plus the `/` landing shell) are prerendered to static HTML at build time, so crawlers and no-JS visitors get real content instead of an empty `<div id="root">`:
+The docs are a **multi-page site**: `/docs` (overview), `/docs/:slug` (section page) and `/docs/:parent/:child` (sub-page), all prerendered to static HTML at build time alongside `/about` — crawlers and no-JS visitors get real content instead of an empty `<div id="root">`:
 
-- `src/prerender.tsx` renders each route with `renderToStaticMarkup` (Node-side only; define per-route titles/descriptions here).
-- `scripts/prerender.mjs` runs automatically after `vite build` (see the `build` script): it bundles the entry with an SSR build, injects the markup into the template's `#root`, and writes `dist/index.html`, `dist/docs/index.html` and `dist/about/index.html`.
-- `src/main.tsx` hydrates the prerendered markup on the client, and redirects the legacy hash URLs (`#/docs`, `#/docs?<anchor>`, `#/about`) to the clean paths.
-- `firebase.json` rewrites `/docs` and `/about` to their static files (and everything else to the app shell).
+- `src/docs/registry.tsx` is the single source of truth for the docs tree (sections, sub-pages, content); the sidebar, overview cards and SSG routes all derive from it.
+- `src/prerender.tsx` renders each route with `renderToStaticMarkup` (Node-side only; per-route titles/descriptions).
+- `scripts/prerender.mjs` runs automatically after `vite build` (see the `build` script): it bundles the entry with an SSR build, injects the markup into the template's `#root`, and writes one `index.html` per route (`dist/index.html`, `dist/docs/index.html`, `dist/docs/<slug>/index.html`, `dist/docs/<parent>/<child>/index.html`, `dist/about/index.html`).
+- `src/main.tsx` hydrates the prerendered markup on the client, and redirects the legacy hash URLs (`#/docs`, `#/docs?<anchor>`, `#/about`) to their new clean paths.
+- `firebase.json` rewrites `/docs/**` and `/about` to their static files (and everything else to the app shell).
 
 ## Docs page screenshots
 
