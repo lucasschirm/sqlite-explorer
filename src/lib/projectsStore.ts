@@ -27,7 +27,7 @@ interface Store {
   projects: StoredProject[];
 }
 
-const STORAGE_KEY = "slitex:projects";
+const STORAGE_KEY = "sqlitexp:projects";
 
 function makeId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;

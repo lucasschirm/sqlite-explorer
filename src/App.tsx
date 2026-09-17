@@ -160,7 +160,7 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
   }, []);
 
   // Open a database via the worker. `opener` abstracts the source: a local
-  // blob (site) or an HTTP range-backed URL (slitex CLI).
+  // blob (site) or an HTTP range-backed URL (sqlitexp CLI).
   const openDatabase = useCallback(
     async (opener: (onProgress: (p: OpenProgress) => void) => Promise<TableInfo[]>, fname: string) => {
       try {
@@ -200,7 +200,7 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
     openDatabaseRef.current = openDatabase;
   });
 
-  // CLI mode: the slitex server pre-opens a database — boot straight into
+  // CLI mode: the sqlitexp server pre-opens a database — boot straight into
   // the explorer (the drop zone only appears if the open fails).
   useEffect(() => {
     if (!cliMode) return;

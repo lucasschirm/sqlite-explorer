@@ -1,5 +1,7 @@
-// Static-site generation (SSG) for /docs and /about, plus the / landing
-// shell. Runs as a post-build step (`vite build && node scripts/prerender.mjs`):
+// Static-site generation (SSG) for every docs page (/docs, /docs/:slug and
+// /docs/:parent/:child — the route list comes from src/docs/registry.tsx),
+// /about and the / landing shell. Runs as a post-build step
+// (`vite build && node scripts/prerender.mjs`):
 //
 //   1. Build an SSR bundle of src/prerender.tsx into .prerender/ (Vite SSR
 //      build — no HTML emitted, externals resolved from node_modules).
@@ -7,8 +9,8 @@
 //      unlike the legacy renderToStaticMarkup it emits <!-- --> separators
 //      between adjacent text nodes, which hydration needs to stay in sync).
 //   3. Inject the markup into the built template's #root and write the pages
-//      as dist/docs/index.html, dist/about/index.html and dist/index.html,
-//      giving every page clean-path URLs.
+//      as dist/<route>/index.html (dist/index.html for /), giving every page
+//      clean-path URLs.
 //   4. Hydration is handled by src/main.tsx on the client.
 //
 // The script deletes .prerender/ when done.
@@ -29,7 +31,7 @@ const distDir = join(root, "dist");
 const ssrOutDir = join(root, ".prerender");
 
 // Route metadata lives next to the rendered components (src/prerender.tsx).
-const ROUTES = ["/", "/docs", "/about"];
+// listRoutes() enumerates "/", "/about", "/docs" and one path per docs page.
 
 /** Minimal HTML-escaping for head tags interpolated into the template. */
 function escapeHtml(text) {
@@ -90,14 +92,20 @@ await build({
   },
 });
 
-const { renderRoute } = await import(
+const { renderRoute, listRoutes } = await import(
   new URL("prerender.js", pathToFileURL(join(ssrOutDir, "/"))).href
 );
 
 const template = await readFile(join(distDir, "index.html"), "utf8");
 
+const ROUTES = listRoutes();
+
 for (const url of ROUTES) {
-  const { element, title, description } = renderRoute(url);
+  // The docs app reads window.location to pick its page; during SSG the
+  // route is injected via context instead (see src/prerender.tsx).
+  const docsPathOverride =
+    url === "/docs" ? "" : url.startsWith("/docs/") ? url.slice("/docs/".length) : undefined;
+  const { element, title, description } = renderRoute(url, docsPathOverride);
   const html = await renderToHtml(element);
 
   // Inject the server markup into the template's #root.
@@ -120,8 +128,8 @@ for (const url of ROUTES) {
     `<title>${escapeHtml(title)}</title>`
   );
 
-  // /docs and /about go to <route>/index.html (clean URLs, served as-is);
-  // / overwrites the template itself.
+  // Every non-root route goes to <route>/index.html (clean URLs, served
+  // as-is); / overwrites the template itself.
   if (url === "/") {
     await writeFile(join(distDir, "index.html"), pageHtml);
   } else {

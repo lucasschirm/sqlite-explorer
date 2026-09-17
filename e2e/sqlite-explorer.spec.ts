@@ -165,6 +165,22 @@ test.describe("SQLite Explorer", () => {
     await expect(rows.filter({ hasText: "email" }).first()).toBeVisible();
     await page.keyboard.press("Escape");
 
+    // The same dot flow works without quotes and case-insensitively —
+    // bare `CUSTOMERS.` resolves against the schema catalog.
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.insertText("SELECT * FROM CUSTOMERS.");
+    await page.keyboard.press("ControlOrMeta+Space");
+    await expect(suggest).toBeVisible();
+    await expect(rows.filter({ hasText: "email" }).first()).toBeVisible();
+
+    // ...and through a table alias declared in FROM/JOIN.
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.insertText("SELECT * FROM customers AS c WHERE c.");
+    await page.keyboard.press("ControlOrMeta+Space");
+    await expect(suggest).toBeVisible();
+    await expect(rows.filter({ hasText: "email" }).first()).toBeVisible();
+    await page.keyboard.press("Escape");
+
     // Format rewrites messy SQL (sql-formatter, sqlite dialect)
     await editor.click();
     await page.keyboard.press("ControlOrMeta+a");
