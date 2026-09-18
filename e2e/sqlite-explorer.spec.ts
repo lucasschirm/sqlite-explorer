@@ -190,6 +190,38 @@ test.describe("SQLite Explorer", () => {
     await expect(editor.getByText("COUNT(*) AS n")).toBeVisible();
   });
 
+  test("reflects the current selection in the /explorer URL", async ({ page }) => {
+    await page.goto("/");
+    await page.getByTestId("load-demo").click();
+    const sidebar = page.locator("aside, .w-60").first();
+    await sidebar.getByText("customers").waitFor({ timeout: 15_000 });
+
+    // Opening a database moves to /explorer (no params yet).
+    await expect(page).toHaveURL(/\/explorer$/);
+
+    // Clicking a table selects it via ?table=.
+    await sidebar.getByText("customers").click();
+    await expect(page).toHaveURL(/\/explorer\?table=customers$/);
+
+    // Switching to another table's tab updates the param.
+    await sidebar.getByText("orders").click();
+    await expect(page).toHaveURL(/\/explorer\?table=orders$/);
+
+    // A tab unrelated to a table or view (an agent-opened SQL tab) is
+    // addressed by its position in the tab strip.
+    await page.evaluate(() => {
+      const testing = (
+        navigator as Navigator & {
+          modelContextTesting?: { executeTool: (n: string, json: string) => Promise<string | null> };
+        }
+      ).modelContextTesting;
+      if (!testing) throw new Error("modelContextTesting shim unavailable");
+      return testing.executeTool("select_table", '{"sql":"SELECT id FROM customers"}');
+    });
+    await page.getByText("SQL 1").click();
+    await expect(page).toHaveURL(/\/explorer\?tab=2$/);
+  });
+
   test("opens a WAL-journal-mode database file", async ({ page }) => {
     // WAL databases need -wal/-shm side files, which a single dropped/picked
     // file cannot provide. The explorer must present them as legacy snapshots.

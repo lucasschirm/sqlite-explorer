@@ -42,6 +42,7 @@ import { useAiStatus } from "./hooks/useAiStatus";
 import { AiStatusPill } from "./components/AiStatusPill";
 import { assetUrl } from "./lib/assetUrl";
 import { siteUrl, sitePathname, sitePushState } from "./lib/siteUrl";
+import { trackEvent } from "./lib/analytics";
 
 let tabIdCounter = 0;
 function nextTabId() {
@@ -112,14 +113,61 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
   // views; opening one swaps the sidebar's Projects list for its Views list
   // and shows the view editor in the main pane.
   const [projects, setProjects] = useState<StoredProject[]>(() => listProjects());
-  const [projectsMode, setProjectsMode] = useState<ProjectsSectionMode>("projects");
-  const [openProjectId, setOpenProjectId] = useState<string | null>(null);
-  const [activeViewId, setActiveViewId] = useState<string | null>(null);
-  const [viewSql, setViewSql] = useState("");
-  const [viewSavedSql, setViewSavedSql] = useState("");
+  // Deep-link bootstrap: /explorer?project=<id>&view=<viewId> restores the
+  // project's Views list and the view editor on first render (projects live
+  // in localStorage, so they survive reloads). ?table= and ?tab= describe
+  // database tabs, which only exist after a file is opened, so those cannot
+  // be restored — a follow-up effect just strips stale params from the URL.
+  const [initialRoute] = useState(() => {
+    if (cliMode) return { project: null as string | null, view: null as string | null, sql: "" };
+    const params = new URLSearchParams(window.location.search);
+    const projectId = params.get("project");
+    if (!projectId || !listProjects().some((p) => p.id === projectId)) {
+      return { project: null, view: null, sql: "" };
+    }
+    const viewId = params.get("view");
+    const found = viewId ? findView(projectId, viewId) : null;
+    return { project: projectId, view: found ? viewId : null, sql: found?.view.sql ?? "" };
+  });
+  const [projectsMode, setProjectsMode] = useState<ProjectsSectionMode>(() =>
+    initialRoute.project ? "views" : "projects"
+  );
+  const [openProjectId, setOpenProjectId] = useState<string | null>(() => initialRoute.project);
+  const [activeViewId, setActiveViewId] = useState<string | null>(() => initialRoute.view);
+  const [viewSql, setViewSql] = useState(initialRoute.sql);
+  const [viewSavedSql, setViewSavedSql] = useState(initialRoute.sql);
   const [viewResult, setViewResult] = useState<{ result: QueryResult; error: string | null } | null>(null);
-  const [viewEditorOpen, setViewEditorOpen] = useState(false);
+  const [viewEditorOpen, setViewEditorOpen] = useState(() => initialRoute.view != null);
   const viewDirty = viewSql !== viewSavedSql;
+
+  /**
+   * Reflect the current selection in the /explorer URL as query params so
+   * states are shareable and the Back button walks the selection history:
+   *   ?table=<name>                 a data/structure table tab
+   *   ?project=<id>                 an opened project (views list)
+   *   ?project=<id>&view=<viewId>   an opened view in the editor
+   *   ?tab=<position>               a tab with no table/view (e.g. SQL tabs)
+   * Every user action that changes the selection pushes a history entry.
+   */
+  const pushSelectionUrl = useCallback(
+    (selection: { table?: string | null; project?: string | null; view?: string | null; tabPosition?: number | null }) => {
+      if (cliMode) return; // local.html has no /explorer route to refresh into
+      const tabPosition =
+        selection.tabPosition != null && selection.tabPosition >= 0 ? String(selection.tabPosition) : null;
+      sitePushState(
+        "/explorer",
+        false,
+        {
+          table: selection.table ?? null,
+          project: selection.project ?? null,
+          view: selection.view ?? null,
+          tab: tabPosition,
+        }
+      );
+    },
+    [cliMode]
+  );
+
   // Browser-only SPA: reading localStorage lazily at first render is safe.
   // After every mutation we re-read with setProjects(listProjects()).
 
@@ -350,6 +398,8 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
         const existing = tabs.find((t) => t.type === "data" && t.tableName === tableName);
         if (existing) {
           setActiveTabId(existing.id);
+          pushSelectionUrl({ table: tableName });
+          trackEvent("open_table", { table_name: tableName });
           return;
         }
         setBusy({ message: `Loading table "${tableName}"`, detail: null });
@@ -360,6 +410,8 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
         setActiveTabId(id);
         setViewEditorOpen(false); // table click takes over the main pane
         setActiveViewId(null); // and deselects any open view
+        pushSelectionUrl({ table: tableName });
+        trackEvent("open_table", { table_name: tableName });
         void runTableQuery(id, sql).finally(() => setBusy(null));
       } catch (err) {
         console.error("Failed to open data tab:", err);
@@ -367,7 +419,7 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
         showToast("error", `Failed to open table: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [tabs, showToast, runTableQuery]
+    [tabs, showToast, runTableQuery, pushSelectionUrl]
   );
 
   // Open structure tab
@@ -380,6 +432,7 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
         const existing = tabs.find((t) => t.type === "structure" && t.tableName === tableName);
         if (existing) {
           setActiveTabId(existing.id);
+          pushSelectionUrl({ table: tableName });
           return;
         }
         setBusy({ message: `Analyzing structure of "${tableName}"`, detail: null });
@@ -394,6 +447,7 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
         setActiveTabId(structureId);
         setViewEditorOpen(false); // table click takes over the main pane
         setActiveViewId(null); // and deselects any open view
+        pushSelectionUrl({ table: tableName });
 
         const columnsRes = await dbClient.query(`PRAGMA table_info("${tableName}")`);
         const indexListRes = await dbClient.query(`PRAGMA index_list("${tableName}")`);
@@ -434,7 +488,7 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
         showToast("error", `Failed to read structure of "${tableName}": ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [tabs, showToast]
+    [tabs, showToast, pushSelectionUrl]
   );
 
   // Open the record drawer for a table row
@@ -476,6 +530,10 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
         setBusy({ message: "Running query", detail: null });
         await runTableQuery(tabId, sql);
         setTabs((prev) => prev.map((t) => (t.id === tabId ? { ...t, sql } : t)));
+        trackEvent("execute_sql", {
+          sql_length: sql.length,
+          table_name: tabs.find((t) => t.id === tabId)?.tableName || undefined,
+        });
       } catch (err) {
         console.error("Failed to run query:", err);
         showToast("error", `Query failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -483,7 +541,7 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
         setBusy(null);
       }
     },
-    [showToast, runTableQuery]
+    [showToast, runTableQuery, tabs]
   );
 
   // Close tab
@@ -526,6 +584,12 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
           setTabs((prev) => [...prev, { id, type: "data", title, tableName: "", sql }]);
         }
         setActiveTabId(id);
+        // New tab lands at the end of the strip; an existing one keeps its
+        // own position.
+        const tabPosition = existing
+          ? tabs.findIndex((t) => t.id === id)
+          : tabs.length;
+        pushSelectionUrl({ tabPosition: tabPosition >= 0 ? tabPosition : null });
         const result = await dbClient.query(paged.pageSql);
         setTabResults((prev) => ({ ...prev, [id]: { result, error: null } }));
       } catch (err) {
@@ -533,7 +597,7 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
         showToast("error", err instanceof Error ? err.message : String(err));
       }
     },
-    [tabs, showToast]
+    [tabs, showToast, pushSelectionUrl]
   );
 
   // Keep the WebMCP tool controller pointed at the latest app state/actions.
@@ -600,20 +664,41 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
     return () => window.removeEventListener("popstate", onPopState);
   }, [cliMode, resetViewEditor]);
 
+  // Deep-link URL cleanup: project/view params that no longer resolve are
+  // stale (deleted since the URL was shared), and ?table=/ ?tab= can never
+  // be restored before a database is opened. Strip them so a reload doesn't
+  // advertise state that isn't there. No state changes — the restore itself
+  // happens in the initialRoute-based lazy initializers above.
+  useEffect(() => {
+    if (cliMode) return;
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("project") && !params.has("view")) return;
+    const projectId = params.get("project");
+    const viewId = params.get("view");
+    if (!projectId || !listProjects().some((p) => p.id === projectId)) {
+      sitePushState("/explorer", true, { project: null, view: null, table: null, tab: null });
+    } else if (viewId && !findView(projectId, viewId)) {
+      sitePushState("/explorer", true, { view: null, table: null, tab: null });
+    }
+  }, [cliMode]);
+
   const openProjectViews = useCallback(
     (projectId: string) => {
       resetViewEditor();
       setProjectsMode("views");
       setOpenProjectId(projectId);
+      pushSelectionUrl({ project: projectId });
+      trackEvent("open_project", { project_id: projectId });
     },
-    [resetViewEditor]
+    [resetViewEditor, pushSelectionUrl]
   );
 
   const closeProjectViews = useCallback(() => {
     resetViewEditor();
     setProjectsMode("projects");
     setOpenProjectId(null);
-  }, [resetViewEditor]);
+    pushSelectionUrl({ project: null, view: null });
+  }, [resetViewEditor, pushSelectionUrl]);
 
   /** Continue a save that started with no project open. */
   const resumePendingSave = useCallback(
@@ -637,6 +722,7 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
         setProjectModalOpen(false);
         setProjects(listProjects());
         openProjectViews(project.id);
+        trackEvent("create_project", { project_id: project.id, project_name: project.name });
         // A save started with no project open: resume it in the new project.
         if (saveEditorSql != null) {
           resumePendingSave(saveEditorSql);
@@ -693,12 +779,16 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
       setViewSql(found.view.sql);
       setViewSavedSql(found.view.sql);
       setViewResult(null);
+      pushSelectionUrl({ project: projectId, view: viewId });
       void runViewSql(found.view.sql);
     },
-    [runViewSql, showToast]
+    [runViewSql, showToast, pushSelectionUrl]
   );
 
-  const handleCloseViewEditor = resetViewEditor;
+  const handleCloseViewEditor = useCallback(() => {
+    resetViewEditor();
+    pushSelectionUrl({ view: null });
+  }, [resetViewEditor, pushSelectionUrl]);
 
   /**
    * Save button / Ctrl+Cmd+S from any SQL editor. No project open → invite to
@@ -779,13 +869,14 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
           setActiveViewId(saved.id);
           setViewSavedSql(sql);
         }
+        pushSelectionUrl({ project: openProjectId, view: saved.id });
         showToast("success", `View "${saved.name}" saved`);
       } catch (err) {
         console.error("Failed to save view:", err);
         showToast("error", `Failed to save view: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [openProjectId, activeViewId, saveEditorSql, viewSql, viewEditorOpen, showToast]
+    [openProjectId, activeViewId, saveEditorSql, viewSql, viewEditorOpen, pushSelectionUrl, showToast]
   );
 
   /** Shared duplicate-name check for both save modals. */
@@ -803,14 +894,17 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
         const name = getViewFrom(projects, projectId, viewId)?.name ?? "view";
         deleteView(projectId, viewId);
         setProjects(listProjects());
-        if (activeViewId === viewId) resetViewEditor();
+        if (activeViewId === viewId) {
+          resetViewEditor();
+          pushSelectionUrl({ view: null });
+        }
         showToast("success", `Deleted view "${name}"`);
       } catch (err) {
         console.error("Failed to delete view:", err);
         showToast("error", `Failed to delete view: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [projects, activeViewId, resetViewEditor, showToast]
+    [projects, activeViewId, resetViewEditor, pushSelectionUrl, showToast]
   );
 
   // Row double-click → record drawer
@@ -909,6 +1003,32 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
     ? tables.filter((t) => t.name.toLowerCase().includes(filterText))
     : tables;
 
+  // Tab switching: plain setActiveTabId is used by TabBar and any other
+  // selection change without a more specific URL destination. The URL gets
+  // ?table= for table tabs, ?project=/?view= when a view editor is open, or
+  // ?tab=<position> for tabs unrelated to a table or view (e.g. SQL tabs).
+  const handleTabSelected = useCallback(
+    (tabId: string) => {
+      setActiveTabId(tabId);
+      // While the view editor is open it owns the main pane, so the URL keeps
+      // describing the view rather than the tab that was clicked.
+      if (viewEditorOpen && openProjectId) {
+        pushSelectionUrl({ project: openProjectId, view: activeViewId });
+        return;
+      }
+      const tab = tabs.find((t) => t.id === tabId);
+      if (tab?.tableName) {
+        pushSelectionUrl({ table: tab.tableName });
+      } else {
+        // Tabs unrelated to a table or view (e.g. SQL tabs) are addressed by
+        // their position in the tab strip.
+        const position = tabs.findIndex((t) => t.id === tabId);
+        pushSelectionUrl({ tabPosition: position >= 0 ? position : null });
+      }
+    },
+    [tabs, viewEditorOpen, openProjectId, activeViewId, pushSelectionUrl]
+  );
+
   // Tab title mirrors the current selection:
   //   table tab open  → "<tableName> | <file>"
   //   saved view open → "<viewName> | <file>"
@@ -1002,7 +1122,7 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
           onResize={setSidebarWidth}
         />
         <div className="flex flex-col flex-1 min-w-0 min-h-0">
-          <TabBar tabs={tabs} activeTabId={activeTabId} onSelectTab={setActiveTabId} onCloseTab={handleCloseTab} />
+          <TabBar tabs={tabs} activeTabId={activeTabId} onSelectTab={handleTabSelected} onCloseTab={handleCloseTab} />
           {viewEditorOpen && openProjectId ? (
             <div className="flex flex-col flex-1 min-h-0">
               {/* View editor header: title, dirty badge, row count/error, close × */}

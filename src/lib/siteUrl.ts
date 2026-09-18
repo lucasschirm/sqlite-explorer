@@ -21,10 +21,17 @@ export function sitePathname(): string {
 
 /**
  * pushState/replaceState to an app-internal path, prefixing it with the
- * deployed base URL so subpath deploys (VITE_BASE) keep working.
+ * deployed base URL so subpath deploys (VITE_BASE) keep working. Extra query
+ * parameters are appended and override any same-named params in `path`.
  */
-export function sitePushState(path: string, replace = false): void {
-  const url = siteUrl(path);
+export function sitePushState(path: string, replace = false, params?: Record<string, string | null>): void {
+  const url = new URL(siteUrl(path), window.location.origin);
+  if (params) {
+    for (const [key, value] of Object.entries(params)) {
+      if (value == null) url.searchParams.delete(key);
+      else url.searchParams.set(key, value);
+    }
+  }
   if (replace) window.history.replaceState(null, "", url);
   else window.history.pushState(null, "", url);
 }
