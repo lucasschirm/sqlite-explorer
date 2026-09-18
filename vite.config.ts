@@ -5,13 +5,16 @@ import { join, resolve } from 'node:path'
 import { defineConfig, type Connect, type Plugin } from 'vite'
 
 // /docs/* and /about only exist as files after the SSG post-build step.
+// /explorer is a client-side route: the same app shell at / once a database
+// is open (history.pushState), so it must serve index.html for refreshes.
 // Dev: always serve index.html (the app hydrates the static page).
 // Preview: serve the prerendered file when present, else the app shell.
 function staticPageRoutes(distDir: string): Plugin {
   const isStatic = (url: string) => url === '/about' || url === '/docs' || url.startsWith('/docs/')
+  const isExplorer = (url: string) => url === '/explorer' || url.startsWith('/explorer/')
   const devMw: Connect.NextHandleFunction = (req, _res, next) => {
     const url = (req.url ?? '').split('?')[0]
-    if (isStatic(url)) req.url = '/index.html'
+    if (isStatic(url) || isExplorer(url)) req.url = '/index.html'
     next()
   }
   const previewMw: Connect.NextHandleFunction = (req, _res, next) => {
@@ -19,6 +22,8 @@ function staticPageRoutes(distDir: string): Plugin {
     if (isStatic(url)) {
       const prerendered = join(distDir, url.slice(1), 'index.html')
       req.url = existsSync(prerendered) ? `${url}/index.html` : '/index.html'
+    } else if (isExplorer(url)) {
+      req.url = '/index.html'
     }
     next()
   }
