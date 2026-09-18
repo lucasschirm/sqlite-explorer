@@ -41,7 +41,7 @@ import { suggestViewName } from "./lib/aiViewName";
 import { useAiStatus } from "./hooks/useAiStatus";
 import { AiStatusPill } from "./components/AiStatusPill";
 import { assetUrl } from "./lib/assetUrl";
-import { siteUrl } from "./lib/siteUrl";
+import { siteUrl, sitePathname, sitePushState } from "./lib/siteUrl";
 
 let tabIdCounter = 0;
 function nextTabId() {
@@ -181,6 +181,15 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
         setBusy(null);
         showToast("success", `Loaded "${fname}" — ${tables.length} tables`);
 
+        // The page “moves” to /explorer once a database is open: the drop
+        // zone lives at /, the explorer at /explorer — as a new history
+        // entry, so Back returns to the upload page (see the popstate
+        // handler below). Skipped in CLI mode: local.html has no /explorer
+        // route on the sqlitexp server.
+        if (!cliMode && !sitePathname().endsWith("/explorer")) {
+          sitePushState("/explorer");
+        }
+
         // Build the SQL completion catalog in the background (schema only,
         // one PRAGMA per table); suggestions appear once it lands.
         void buildSchemaCatalog((sql) => dbClient.query(sql)).then((catalog) => {
@@ -193,7 +202,7 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
           "error",
           `Failed to open database: ${err instanceof Error ? err.message : String(err)}`
         );
-      }  }, [showToast]);
+      }  }, [cliMode, showToast]);
 
   // Keep the handover listener's view of openDatabase current.
   useEffect(() => {
@@ -568,6 +577,29 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
     setViewResult(null);
   }, []);
 
+  // Navigating away from /explorer via the browser's Back/Forward buttons
+  // acts like leaving the page: the database is closed and the drop zone
+  // renders again. All resets below are idempotent, so the handler works for
+  // both Back (exit to /) and Forward (re-enter the already-traversed URL).
+  useEffect(() => {
+    if (cliMode) return; // CLI boots straight into the explorer; no routing
+    const onPopState = () => {
+      if (sitePathname().endsWith("/explorer")) return;
+      setHasDb(false);
+      setFilename(null);
+      setTables([]);
+      setTabs([]);
+      setActiveTabId(null);
+      setTabResults({});
+      setStructureData({});
+      setRecordDrawer(null);
+      resetViewEditor();
+      void dbClient.close();
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [cliMode, resetViewEditor]);
+
   const openProjectViews = useCallback(
     (projectId: string) => {
       resetViewEditor();
@@ -876,6 +908,22 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
   const visibleTables = filterText
     ? tables.filter((t) => t.name.toLowerCase().includes(filterText))
     : tables;
+
+  // Tab title mirrors the current selection:
+  //   table tab open  → "<tableName> | <file>"
+  //   saved view open → "<viewName> | <file>"
+  //   otherwise       → "<file>"
+  // With no database open the page's own static <title> (prerendered per
+  // route, e.g. the landing page or the CLI viewer) is restored.
+  const [defaultTitle] = useState(() => document.title);
+  useEffect(() => {
+    if (!filename) {
+      document.title = defaultTitle;
+      return;
+    }
+    const selection = activeTab?.tableName ?? (viewEditorOpen ? activeView?.name ?? null : null);
+    document.title = selection ? `${selection} | ${filename}` : filename;
+  }, [filename, activeTab, viewEditorOpen, activeView, defaultTitle]);
 
   if (!hasDb) {
     return (
