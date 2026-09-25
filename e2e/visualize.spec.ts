@@ -12,7 +12,7 @@ async function loadDemo(page: Page): Promise<void> {
 
 async function openDiagram(page: Page): Promise<void> {
   await page.getByTestId("sidebar-section-diagram").click();
-  await expect(page).toHaveURL(/#\/visualize$/);
+  await expect(page).toHaveURL(/\/visualize$/);
   // The ERD canvas mounts once the schema is parsed (sqlite-erd's own WASM
   // SQLite parses the DDL; the canvas is a React Flow instance).
   await expect(page.locator(".react-flow__node")).not.toHaveCount(0, { timeout: 30_000 });
@@ -30,8 +30,8 @@ test.describe("ERD diagram page (/visualize)", () => {
 
     const sections = page.getByTestId("sidebar-sections");
     await expect(sections).toBeVisible();
-    await expect(sections.getByText("Data", { exact: true })).toBeVisible();
-    await expect(sections.getByText("Diagram", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("sidebar-section-data")).toBeVisible();
+    await expect(page.getByTestId("sidebar-section-diagram")).toBeVisible();
 
     await openDiagram(page);
     // The ERD renders the demo tables as nodes
@@ -52,8 +52,8 @@ test.describe("ERD diagram page (/visualize)", () => {
 
     await page.locator(".react-flow__node", { hasText: "orders" }).click();
 
-    // Back on the explorer (#/), the orders Data tab is open with its query
-    await expect(page).toHaveURL(/#\/$|\/$/);
+    // Back on the explorer (/explorer), the orders Data tab is open with its query
+    await expect(page).toHaveURL(/\/explorer\?table=orders$/);
     await expect(tab(page, "orders")).toBeVisible({ timeout: 15_000 });
     await expect(page.locator(".monaco-editor .view-lines")).toContainText(
       'SELECT * FROM "orders" LIMIT 100',
@@ -70,7 +70,7 @@ test.describe("ERD diagram page (/visualize)", () => {
 
     // Clicking a table in the sidebar switches back to Data and opens the tab
     await sidebar.getByText("customers").click();
-    await expect(page).toHaveURL(/#\/$|\/$/);
+    await expect(page).toHaveURL(/\/explorer\?table=customers$/);
     await expect(tab(page, "customers")).toBeVisible({ timeout: 15_000 });
   });
 
@@ -81,18 +81,38 @@ test.describe("ERD diagram page (/visualize)", () => {
     await expect(tab(page, "customers")).toBeVisible();
 
     await page.getByTestId("sidebar-section-diagram").click();
-    await expect(page).toHaveURL(/#\/visualize$/);
+    await expect(page).toHaveURL(/\/visualize$/);
     await page.getByTestId("sidebar-section-data").click();
-    await expect(page).toHaveURL(/#\/$|\/$/);
+    await expect(page).toHaveURL(/\/explorer$/);
     // Tab survives the round trip
     await expect(tab(page, "customers")).toBeVisible();
   });
 
-  test("direct navigation to #/visualize without a database shows the empty state", async ({ page }) => {
-    await page.goto("/#/visualize");
+  test("direct navigation to /visualize without a database shows the empty state", async ({ page }) => {
+    await page.goto("/visualize");
     await expect(page.getByText("No database open")).toBeVisible({ timeout: 15_000 });
     await page.getByText("← Back to the explorer").click();
-    await expect(page).toHaveURL(/#\/$|\/$/);
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.getByTestId("load-demo")).toBeVisible();
+  });
+
+  test("legacy #/visualize deep links redirect to /visualize", async ({ page }) => {
+    await page.goto("/#/visualize");
+    await expect(page).toHaveURL(/\/visualize$/);
+    await expect(page.getByText("No database open")).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("browser Back from the diagram returns to the drop zone after leaving the explorer", async ({ page }) => {
+    // Back through the section switches: diagram → data, then out of the
+    // explorer — the drop zone must come back (not a stale diagram view).
+    await loadDemo(page);
+    await openDiagram(page);
+    await page.goBack();
+    await expect(page).toHaveURL(/\/explorer$/);
+    await expect(page.getByTestId("sidebar-section-data")).toHaveAttribute("aria-selected", "true");
+
+    await page.goBack();
+    await expect(page).toHaveURL(/\/$/);
     await expect(page.getByTestId("load-demo")).toBeVisible();
   });
 });

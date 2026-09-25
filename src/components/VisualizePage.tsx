@@ -7,8 +7,8 @@
 // renders its usual Sidebar next to this page, so the left navigation stays
 // consistent between Data and Diagram.
 //
-// Clicking a table or view node on the diagram navigates back to the explorer
-// (hash route "#/") where that table's Data tab opens. sqlite-erd does not
+// Clicking a table or view node on the diagram navigates back to the
+// explorer (/explorer) where that table's Data tab opens. sqlite-erd does not
 // expose a table-click callback on its exported <SQLiteERD> component, so the
 // click is detected via event delegation on React Flow's node DOM elements
 // (which carry the node id — the table name — in their data-id attribute).
@@ -16,6 +16,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { SQLiteERD } from "sqlite-erd";
 import "sqlite-erd/sqlite-erd.css";
 import { getVisualizeDb } from "../lib/visualizeState";
+import { siteUrl } from "../lib/siteUrl";
 
 interface VisualizePageProps {
   /** Navigate back to the explorer and open a table's Data tab. */
@@ -78,7 +79,7 @@ export function VisualizePage({ onOpenTable }: VisualizePageProps) {
             from the open database's schema and never leaves your machine.
           </p>
           <a
-            href="#/"
+            href={siteUrl("/")}
             className="mt-5 inline-block text-xs bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded transition-colors"
           >
             ← Back to the explorer

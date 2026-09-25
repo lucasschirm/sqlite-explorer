@@ -80,7 +80,7 @@ export function AboutPage() {
             sqlite-erd
           </a>{" "}
           — interactive Entity-Relationship Diagrams for SQLite, powering the
-          Diagram view (#/visualize).
+          Diagram view (/visualize).
         </li>
       </ul>
     </div>

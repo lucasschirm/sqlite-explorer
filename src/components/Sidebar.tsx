@@ -12,6 +12,11 @@ interface SidebarProps {
   onSelectTable: (tableName: string) => void;
   onSelectStructure: (tableName: string) => void;
 
+  // Left-menu section: Data (tables/tabs) or Diagram (ERD page). Switching
+  // is a URL change (/explorer ↔ /visualize) owned by the parent.
+  section: "data" | "diagram";
+  onSectionChange: (section: "data" | "diagram") => void;
+
   // Projects / views section (below the tables list)
   projects: StoredProject[];
   projectsMode: ProjectsSectionMode;
@@ -33,6 +38,8 @@ export function Sidebar({
   activeTable,
   onSelectTable,
   onSelectStructure,
+  section,
+  onSectionChange,
   projects,
   projectsMode,
   openProject,
@@ -51,6 +58,37 @@ export function Sidebar({
       style={width != null ? { width } : undefined}
       className="w-60 shrink-0 bg-gray-900 text-gray-300 flex flex-col border-r border-gray-700 h-full"
     >
+      {/* Data | Diagram switcher — the Diagram section shows the database's
+          ERD (/visualize) in the main pane while this sidebar stays put. */}
+      <div
+        data-testid="sidebar-sections"
+        role="tablist"
+        aria-label="Sidebar sections"
+        className="flex border-b border-gray-700 shrink-0"
+      >
+        {(
+          [
+            ["data", "Data", "📋"],
+            ["diagram", "Diagram", "🧩"],
+          ] as const
+        ).map(([key, label, icon]) => (
+          <button
+            key={key}
+            role="tab"
+            aria-selected={section === key}
+            data-testid={`sidebar-section-${key}`}
+            onClick={() => onSectionChange(key)}
+            className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-xs font-medium transition-colors ${
+              section === key
+                ? "text-white bg-gray-800 border-b-2 border-blue-500"
+                : "text-gray-400 hover:text-gray-200 hover:bg-gray-800/50"
+            }`}
+          >
+            <span className="text-[11px] opacity-70">{icon}</span>
+            {label}
+          </button>
+        ))}
+      </div>
       <div className="px-4 py-3 border-b border-gray-700">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500">
           Tables ({tables.length}

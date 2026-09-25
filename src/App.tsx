@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, Suspense, lazy } from "react";
+import type { ReactNode } from "react";
 import type { TableInfo, Tab, ColumnInfo, QueryResult, CellValue } from "./types";
 import { formatCellValue } from "./types";
 import { peekFileBytes, looksLikeSqlite } from "./lib/readFile";
@@ -43,6 +44,15 @@ import { AiStatusPill } from "./components/AiStatusPill";
 import { assetUrl } from "./lib/assetUrl";
 import { siteUrl, sitePathname, sitePushState } from "./lib/siteUrl";
 import { trackEvent } from "./lib/analytics";
+// /visualize ERD page (sqlite-erd) — rendered inside the explorer shell when
+// the sidebar's Diagram section is active. Lazy: the ERD chunk carries its
+// own Tailwind build (sqlite-erd.css), which must stay in its own stylesheet
+// file — merging it into the app bundle reorders cascade-layer utilities and
+// breaks responsive variants app-wide (e.g. the docs nav's hidden lg:block).
+const VisualizePage = lazy(() =>
+  import("./components/VisualizePage").then((m) => ({ default: m.VisualizePage }))
+);
+import { setVisualizeDb } from "./lib/visualizeState";
 
 let tabIdCounter = 0;
 function nextTabId() {
@@ -56,6 +66,19 @@ function nextTabId() {
 let sqlTabCounter = 0;
 function nextSqlTitle() {
   return `SQL ${++sqlTabCounter}`;
+}
+
+/** Suspense boundary for the lazy /visualize ERD chunk — centered spinner. */
+function VisualizePageFallback({ children }: { children: ReactNode }) {
+  return (
+    <Suspense fallback={
+      <div className="flex-1 min-w-0 flex items-center justify-center">
+        <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    }>
+      {children}
+    </Suspense>
+  );
 }
 
 function formatBytes(bytes: number): string {
@@ -105,6 +128,16 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
 
   // Sidebar table filter — driven by the WebMCP list_tables tool.
   const [tableFilter, setTableFilter] = useState("");
+
+  // Left-menu section: Data (tabs + grids) or Diagram (/visualize ERD page).
+  // Path-based, mirroring how the explorer itself is a pushState route: the
+  // sidebar switcher pushes /visualize or /explorer, Back/Forward flips the
+  // section via popstate (the effect below restores the previous section's
+  // state idempotently). Deep links to /visualize with no database open show
+  // the ERD empty state in the app shell.
+  const [section, setSection] = useState<"data" | "diagram">(() =>
+    cliMode || sitePathname().endsWith("/visualize") ? "diagram" : "data"
+  );
 
   // Draggable sidebar width (px), managed by the SidebarResizer handle.
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
@@ -238,6 +271,24 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
           sitePushState("/explorer");
         }
 
+        // Capture the schema for the /visualize ERD page. DDL text (not the
+        // binary file) is handed over — the ERD parses SQL client-side, so no
+        // database bytes are re-read or duplicated on that page.
+        try {
+          const ddl = await dbClient.query(
+            `SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'view' THEN 1 ELSE 2 END, name`
+          );
+          const schemaSql =
+            ddl.rows
+              .map((r) => String(r[0] ?? ""))
+              .filter((s) => s.length > 0)
+              .join(";\n\n") + ";";
+          setVisualizeDb({ name: fname, schemaSql, tables });
+        } catch (err) {
+          console.error("Failed to capture schema for the diagram view:", err);
+          setVisualizeDb({ name: fname, schemaSql: null, tables });
+        }
+
         // Build the SQL completion catalog in the background (schema only,
         // one PRAGMA per table); suggestions appear once it lands.
         void buildSchemaCatalog((sql) => dbClient.query(sql)).then((catalog) => {
@@ -245,6 +296,9 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
         });
       } catch (err) {
         console.error("Failed to open SQLite database:", err);
+        // Drop any previously captured schema so the diagram page never
+        // advertises a database that is no longer open.
+        setVisualizeDb({ name: null, schemaSql: null, tables: [] });
         setBusy(null);
         showToast(
           "error",
@@ -648,7 +702,13 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
   useEffect(() => {
     if (cliMode) return; // CLI boots straight into the explorer; no routing
     const onPopState = () => {
-      if (sitePathname().endsWith("/explorer")) return;
+      const path = sitePathname();
+      if (path.endsWith("/explorer") || path.endsWith("/visualize")) {
+        // Back/Forward between the Data and Diagram sections — the explorer
+        // shell keeps its state; only the active section flips.
+        setSection(path.endsWith("/visualize") ? "diagram" : "data");
+        return;
+      }
       setHasDb(false);
       setFilename(null);
       setTables([]);
@@ -658,6 +718,7 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
       setStructureData({});
       setRecordDrawer(null);
       resetViewEditor();
+      setSection("data"); // leaving the app also exits the Diagram section
       void dbClient.close();
     };
     window.addEventListener("popstate", onPopState);
@@ -907,6 +968,44 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
     [projects, activeViewId, resetViewEditor, pushSelectionUrl, showToast]
   );
 
+  // Sidebar switcher: Data ↔ Diagram. Each switch is a real URL (/explorer
+  // vs /visualize) so Back/Forward walk the section history; the popstate
+  // handler above flips the section back without dropping app state.
+  const handleSectionChange = useCallback(
+    (next: "data" | "diagram") => {
+      if (next === section) return;
+      setSection(next);
+      if (cliMode) return; // local.html has no /visualize route to push
+      sitePushState(next === "diagram" ? "/visualize" : "/explorer");
+    },
+    [section, cliMode]
+  );
+
+  // Sidebar/Diagram table clicks must land in the Data section: switching
+  // back from Diagram is part of the same interaction, so the clicked table's
+  // tab (or structure grid) is visible immediately.
+  const openTableInDataSection = useCallback(
+    (tableName: string) => {
+      if (section !== "data") {
+        setSection("data");
+        if (!cliMode) sitePushState("/explorer");
+      }
+      openDataTab(tableName);
+    },
+    [section, cliMode, openDataTab]
+  );
+
+  const openStructureInDataSection = useCallback(
+    (tableName: string) => {
+      if (section !== "data") {
+        setSection("data");
+        if (!cliMode) sitePushState("/explorer");
+      }
+      void openStructureTab(tableName);
+    },
+    [section, cliMode, openStructureTab]
+  );
+
   // Row double-click → record drawer
   const handleRowDoubleClick = useCallback(
     async (tab: Tab, rowIndex: number) => {
@@ -1046,6 +1145,25 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
   }, [filename, activeTab, viewEditorOpen, activeView, defaultTitle]);
 
   if (!hasDb) {
+    if (section === "diagram") {
+      // Deep link to /visualize with nothing open — show the ERD empty state
+      // (VisualizePage includes the back-to-explorer escape hatch).
+      return (
+        <div className="h-screen w-screen flex flex-col bg-gray-50">
+          <header className="px-6 py-3 bg-gray-900 text-white flex items-center gap-3 shrink-0">
+            <span className="text-lg">🗄️</span>
+            <h1 className="text-sm font-semibold">SQLite Explorer</h1>
+            <nav className="ml-auto flex items-center gap-4 text-xs">
+              <a href={siteUrl("/docs")} className="text-gray-300 hover:text-white transition-colors">Docs</a>
+              <a href={siteUrl("/about")} className="text-gray-300 hover:text-white transition-colors">About</a>
+            </nav>
+          </header>
+          <VisualizePageFallback>
+            <VisualizePage onOpenTable={openTableInDataSection} />
+          </VisualizePageFallback>
+        </div>
+      );
+    }
     return (
       <div className="h-screen w-screen flex flex-col bg-gray-50">
         <header className="px-6 py-3 bg-gray-900 text-white flex items-center gap-3 shrink-0">
@@ -1102,8 +1220,10 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
           tables={visibleTables}
           filteredFrom={tables.length}
           activeTable={activeTab?.tableName ?? null}
-          onSelectTable={openDataTab}
-          onSelectStructure={openStructureTab}
+          onSelectTable={openTableInDataSection}
+          onSelectStructure={openStructureInDataSection}
+          section={section}
+          onSectionChange={handleSectionChange}
           projects={projects}
           projectsMode={projectsMode}
           openProject={projects.find((p) => p.id === openProjectId) ?? null}
@@ -1122,7 +1242,13 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
           onResize={setSidebarWidth}
         />
         <div className="flex flex-col flex-1 min-w-0 min-h-0">
-          <TabBar tabs={tabs} activeTabId={activeTabId} onSelectTab={handleTabSelected} onCloseTab={handleCloseTab} />
+          {section === "diagram" ? (
+            <VisualizePageFallback>
+              <VisualizePage onOpenTable={openTableInDataSection} />
+            </VisualizePageFallback>
+          ) : (
+            <>
+              <TabBar tabs={tabs} activeTabId={activeTabId} onSelectTab={handleTabSelected} onCloseTab={handleCloseTab} />
           {viewEditorOpen && openProjectId ? (
             <div className="flex flex-col flex-1 min-h-0">
               {/* View editor header: title, dirty badge, row count/error, close × */}
@@ -1206,6 +1332,8 @@ function Explorer({ cliMode = false }: { cliMode?: boolean }) {
                 ? "Open a project in the sidebar to manage its views"
                 : "Click a table in the sidebar to get started"}
             </div>
+          )}
+            </>
           )}
         </div>
       </div>

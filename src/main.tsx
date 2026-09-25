@@ -3,7 +3,8 @@
 // (scripts/prerender.mjs + src/prerender.tsx) and hydrated here; / boots the
 // interactive explorer (it needs drag & drop + the SQLite worker, so there is
 // no useful static markup for it). The entry also redirects legacy URLs
-// (#/docs, #/docs?<anchor>, #/about and the old /docs?<anchor> deep links).
+// (#/docs, #/docs?<anchor>, #/about, #/visualize and the old /docs?<anchor>
+// deep links).
 import { StrictMode } from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 import "./index.css";
@@ -25,6 +26,16 @@ function staticPageForPath(pathname: string): StaticPage | null {
   const normalized = path.replace(/\/+$/, "") || "/";
   if (normalized === "/docs" || normalized.startsWith("/docs/")) return "docs";
   return normalized === "/about" ? "about" : null;
+}
+
+/** Client-rendered explorer route: the app shell at /explorer and the
+ * /visualize ERD page (same bundle, no useful static markup — the explorer
+ * needs drag & drop + the SQLite worker, and the diagram is module state). */
+function isExplorerRoute(pathname: string): boolean {
+  const base = (import.meta.env.BASE_URL ?? "/").replace(/\/?$/, "/");
+  const path = pathname.startsWith(base) ? `/${pathname.slice(base.length)}` : pathname;
+  const normalized = path.replace(/\/+$/, "") || "/";
+  return normalized === "/explorer" || normalized === "/visualize";
 }
 
 function StaticApp({ page }: { page: StaticPage }) {
@@ -73,6 +84,11 @@ function redirectLegacyAnchor(): boolean {
 // replaces the URL in the same navigation.
 (function redirectLegacyHash(): void {
   const hash = window.location.hash;
+  if (hash === "#/visualize") {
+    // ERD deep links from before the path-routing conversion.
+    window.location.replace(siteUrl("/visualize"));
+    return;
+  }
   if (!hash.startsWith("#/docs") && !hash.startsWith("#/about")) return;
   const target = hash.startsWith("#/docs") ? "/docs" : "/about";
   const anchor = hash.startsWith("#/docs?") ? hash.slice("#/docs?".length) : null;
@@ -98,6 +114,14 @@ if (page) {
     document.getElementById("root")!,
     <StrictMode>
       <StaticApp page={page} />
+    </StrictMode>
+  );
+} else if (isExplorerRoute(window.location.pathname)) {
+  // Explorer shell (/explorer) and the /visualize ERD page: client-rendered,
+  // like / (the app pushes these routes itself once a database is open).
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <App />
     </StrictMode>
   );
 } else {
