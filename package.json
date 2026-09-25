@@ -23,6 +23,7 @@
     "react-dom": "^19.2.8",
     "sql-formatter": "^15.8.2",
     "sql.js": "^1.14.2",
+    "sqlite-erd": "^1.2.0",
     "wa-sqlite": "^1.0.0"
   },
   "devDependencies": {

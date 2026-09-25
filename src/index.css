@@ -53,3 +53,14 @@ html, body, #root {
 .scrollbar-thin::-webkit-scrollbar-thumb:hover {
   background: #9ca3af;
 }
+
+/* sqlite-erd (ERD view): preflight-lite — strip list styles/borders that the
+   app's Tailwind preflight already removed, without restyling anything else.
+   Its own stylesheet relies on Tailwind v4 cascade layers that end up after
+   ours, so this only needs to neutralize the few rules that leak outside the
+   diagram container (e.g. ol/ul margins on the ERD toolbar). */
+.erd-page ol, .erd-page ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}

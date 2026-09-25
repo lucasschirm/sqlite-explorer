@@ -58,6 +58,7 @@ const TOC = [
   ["ai-completions", "AI completions"],
   ["structure-tab", "Structure tab"],
   ["record-drawer", "Record drawer"],
+  ["erd-diagram", "ERD diagram"],
   ["performance", "Large files & performance"],
   ["agent-tools", "Agent tools (WebMCP)"],
   ["keyboard", "Keyboard shortcuts"],
@@ -202,6 +203,39 @@ export function DocsPage() {
           visible column is not the rowid.
         </p>
         <Shot name="07-record-drawer" alt="Record drawer — one record shown as a typed, read-only form" />
+      </Section>
+
+      <Section id="erd-diagram" title="ERD diagram">
+        <p>
+          Switch the sidebar to <strong>Diagram</strong> (or open{" "}
+          <Code>#/visualize</Code> directly) to see the open database as an
+          interactive <strong>Entity-Relationship Diagram</strong>: every table
+          with its columns, primary keys, foreign keys and indexes, plus the
+          relationships between them — including relationships inferred from
+          column names when no explicit foreign key exists. Pan, zoom, and drag
+          nodes freely to arrange the layout.
+        </p>
+        <p>
+          <strong>Click a table on the diagram</strong> to jump back to
+          the data explorer with that table's Data tab open. The left sidebar
+          stays available in Diagram view, so you can also open tables from
+          there. A light/dark toggle for the diagram sits in its top-right
+          corner.
+        </p>
+        <p>
+          The diagram is generated from the open database's schema and rendered
+          entirely in your browser — nothing is uploaded. It is built with the
+          open-source{" "}
+          <a
+            href="https://github.com/jurerotar/sqlite-erd"
+            className="text-blue-600 hover:underline"
+            target="_blank"
+            rel="noreferrer"
+          >
+            sqlite-erd
+          </a>{" "}
+          package.
+        </p>
       </Section>
 
       <Section id="performance" title="Large files & performance">

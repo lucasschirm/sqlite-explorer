@@ -12,6 +12,7 @@ Built with React + Vite + Tailwind CSS + wa-sqlite (WebAssembly SQLite) + @tanst
 - **Tables sidebar** — row counts per table, click to open a Data tab, hover for the Structure shortcut
 - **Data tab** — Monaco SQL editor (defaults to `SELECT * FROM <table> LIMIT 100`) with schema-aware autocomplete (tables, `table.` → columns), SQL formatting (button or Shift+Alt+F), Run button or Ctrl/Cmd+Enter, virtualized read-only grid
 - **Structure tab** — columns grid (name, type, notnull, default, pk) and indexes grid (name, unique, origin, columns)
+- **ERD diagram** — `#/visualize` renders the open database as an interactive Entity-Relationship Diagram ([sqlite-erd](https://github.com/jurerotar/sqlite-erd)); reachable via the sidebar's Data | Diagram switcher; clicking a table jumps back to its Data tab
 - **Record tab** — double-click any row to open a form view with type-aware read-only fields
 - **Feedback everywhere** — busy overlays for actions, toast notifications, `console.error` for failures
 - **WebMCP agent tools** — `list_tables`, `view_table` and `select_table` are exposed via `document.modelContext` (WebMCP polyfill), so AI agents can browse the database and drive the UI

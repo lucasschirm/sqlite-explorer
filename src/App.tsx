@@ -8,6 +8,7 @@ import { LoadingOverlay } from "./components/LoadingOverlay";
 import { FileDropZone } from "./components/FileDropZone";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
+import { VisualizePage } from "./components/VisualizePage";
 // Monaco is heavy (~700KB gzipped) — load it only when a database is open
 // and a data tab renders the editor, keeping the drop-zone page instant.
 const SqlEditor = lazy(() =>
@@ -18,6 +19,7 @@ import { StructureTab } from "./components/StructureTab";
 import { RecordDrawer } from "./components/RecordDrawer";
 import { buildSchemaCatalog, setSchemaCatalog } from "./lib/sqlCompletions";
 import { initWebMcpTools, setWebMcpController, buildPagedQuery } from "./lib/webmcp";
+import { setVisualizeDb } from "./lib/visualizeState";
 import { aiClient } from "./lib/aiClient";
 import { AiStatusPill } from "./components/AiStatusPill";
 import { DocsPage } from "./components/DocsPage";
@@ -29,9 +31,10 @@ function nextTabId() {
   return `tab-${++tabIdCounter}`;
 }
 
-// Minimal hash routing: "" (app), "#/docs" (documentation), "#/about".
-// Docs anchors look like "#/docs?structure-tab" — hashchange re-scrolls.
-type Route = { page: "app" | "docs" | "about"; anchor: string | null };
+// Minimal hash routing: "" (app), "#/visualize" (ERD), "#/docs"
+// (documentation), "#/about". Docs anchors look like "#/docs?structure-tab" —
+// hashchange re-scrolls.
+type Route = { page: "app" | "docs" | "about" | "visualize"; anchor: string | null };
 function parseHash(): Route {
   const hash = window.location.hash;
   if (hash.startsWith("#/docs")) {
@@ -39,6 +42,7 @@ function parseHash(): Route {
     return { page: "docs", anchor };
   }
   if (hash.startsWith("#/about")) return { page: "about", anchor: null };
+  if (hash.startsWith("#/visualize")) return { page: "visualize", anchor: null };
   return { page: "app", anchor: null };
 }
 
@@ -89,7 +93,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-function DatabaseApp() {
+function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
   const { showToast } = useToast();
 
   // Synchronous re-entry guard (state updates are async, so two drops in the
@@ -115,6 +119,19 @@ function DatabaseApp() {
 
   // Sidebar table filter — driven by the WebMCP list_tables tool.
   const [tableFilter, setTableFilter] = useState("");
+
+  // Left-menu section: Data (tabs + grids) or Diagram (ERD page). Derived
+  // from the hash route so the URL stays the single source of truth — the
+  // sidebar switcher just sets "#/visualize" or "#/".
+  const section: "data" | "diagram" = routePage === "visualize" ? "diagram" : "data";
+
+  const handleSectionChange = useCallback((next: "data" | "diagram") => {
+    if (next === "diagram") {
+      if (window.location.hash !== "#/visualize") window.location.hash = "#/visualize";
+    } else if (window.location.hash !== "" && window.location.hash !== "#/") {
+      window.location.hash = "#/";
+    }
+  }, []);
 
   // Right-side drawer showing one record in form view.
   const [recordDrawer, setRecordDrawer] = useState<{
@@ -157,6 +174,23 @@ function DatabaseApp() {
         setBusy(null);
         showToast("success", `Loaded "${fname}" — ${tables.length} tables`);
 
+        // Capture the schema for the /visualize ERD page. DDL text (not the
+        // binary file) is handed over — the ERD parses SQL client-side, so no
+        // database bytes are re-read or duplicated on that page.
+        try {
+          const ddl = await dbClient.query(
+            `SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'view' THEN 1 ELSE 2 END, name`
+          );
+          const schemaSql = ddl.rows
+            .map((r) => String(r[0] ?? ""))
+            .filter((s) => s.length > 0)
+            .join(";\n\n") + ";";
+          setVisualizeDb({ name: fname, schemaSql, tables });
+        } catch (err) {
+          console.error("Failed to capture schema for the diagram view:", err);
+          setVisualizeDb({ name: fname, schemaSql: null, tables });
+        }
+
         // Build the SQL completion catalog in the background (schema only,
         // one PRAGMA per table); suggestions appear once it lands.
         void buildSchemaCatalog((sql) => dbClient.query(sql)).then((catalog) => {
@@ -164,6 +198,9 @@ function DatabaseApp() {
         });
       } catch (err) {
         console.error("Failed to open SQLite database:", err);
+        // Drop any previously captured schema so the diagram page never
+        // advertises a database that is no longer open.
+        setVisualizeDb({ name: null, schemaSql: null, tables: [] });
         setBusy(null);
         showToast(
           "error",
@@ -473,6 +510,17 @@ function DatabaseApp() {
     });
   });
 
+  // Diagram node click → back to the explorer with the table's Data tab open.
+  // Setting the hash triggers the route re-render; the tab state update batches
+  // into the same render, so the explorer lands directly on that table.
+  const handleOpenTableFromDiagram = useCallback(
+    (tableName: string) => {
+      handleSectionChange("data");
+      openDataTab(tableName);
+    },
+    [handleSectionChange, openDataTab]
+  );
+
   // Row double-click → record drawer
   const handleRowDoubleClick = useCallback(
     async (tab: Tab, rowIndex: number) => {
@@ -569,6 +617,22 @@ function DatabaseApp() {
     : tables;
 
   if (!hasDb) {
+    if (routePage === "visualize") {
+      // Deep link to the diagram with nothing open — show its empty state.
+      return (
+        <div className="h-screen w-screen flex flex-col bg-gray-50">
+          <header className="px-6 py-3 bg-gray-900 text-white flex items-center gap-3 shrink-0">
+            <span className="text-lg">🗄️</span>
+            <h1 className="text-sm font-semibold">SQLite Explorer</h1>
+            <nav className="ml-auto flex items-center gap-4 text-xs">
+              <a href="#/docs" className="text-gray-300 hover:text-white transition-colors">Docs</a>
+              <a href="#/about" className="text-gray-300 hover:text-white transition-colors">About</a>
+            </nav>
+          </header>
+          <VisualizePage onOpenTable={handleOpenTableFromDiagram} />
+        </div>
+      );
+    }
     return (
       <div className="h-screen w-screen flex flex-col bg-gray-50">
         <header className="px-6 py-3 bg-gray-900 text-white flex items-center gap-3 shrink-0">
@@ -624,11 +688,17 @@ function DatabaseApp() {
           tables={visibleTables}
           filteredFrom={tables.length}
           activeTable={activeTab?.tableName ?? null}
+          section={section}
           onSelectTable={openDataTab}
           onSelectStructure={openStructureTab}
+          onSectionChange={handleSectionChange}
         />
-        <div className="flex flex-col flex-1 min-w-0 min-h-0">
-          <TabBar tabs={tabs} activeTabId={activeTabId} onSelectTab={setActiveTabId} onCloseTab={handleCloseTab} />
+        {section === "diagram" && (
+          <VisualizePage onOpenTable={handleOpenTableFromDiagram} />
+        )}
+        {section === "data" && (
+          <div className="flex flex-col flex-1 min-w-0 min-h-0">
+            <TabBar tabs={tabs} activeTabId={activeTabId} onSelectTab={setActiveTabId} onCloseTab={handleCloseTab} />
           {activeTab ? (
             <div className="flex flex-col flex-1 min-h-0">
               {activeTab.type === "data" && (
@@ -661,7 +731,8 @@ function DatabaseApp() {
               Click a table in the sidebar to get started
             </div>
           )}
-        </div>
+          </div>
+        )}
       </div>
 
       <RecordDrawer
@@ -719,7 +790,7 @@ export default function WrappedApp() {
   }
   return (
     <ToastProvider>
-      <DatabaseApp />
+      <DatabaseApp routePage={route.page === "visualize" ? "visualize" : "app"} />
     </ToastProvider>
   );
 }
