@@ -1,14 +1,31 @@
 import { useState, useCallback, useRef, useEffect, Suspense, lazy } from "react";
 import type { TableInfo, Tab, ColumnInfo, QueryResult, CellValue } from "./types";
 import { formatCellValue } from "./types";
-import { peekFileBytes } from "./lib/readFile";
+import { peekFileBytes, looksLikeSqlite } from "./lib/readFile";
+import { initHandoverReceiver, allowedOriginsFromLocation } from "./lib/handover";
 import { dbClient, type OpenProgress } from "./lib/dbClient";
 import { ToastProvider, useToast } from "./components/Toast";
 import { LoadingOverlay } from "./components/LoadingOverlay";
 import { FileDropZone } from "./components/FileDropZone";
 import { Sidebar } from "./components/Sidebar";
+import { SidebarResizer, SIDEBAR_DEFAULT_WIDTH } from "./components/SidebarResizer";
 import { TabBar } from "./components/TabBar";
-import { VisualizePage } from "./components/VisualizePage";
+import { NameModal } from "./components/NameModal";
+import { SaveOptionsModal } from "./components/SaveOptionsModal";
+import { NoProjectModal } from "./components/NoProjectModal";
+import type { ProjectsSectionMode } from "./components/ProjectsSection";
+import {
+  listProjects,
+  createProject,
+  deleteProject,
+  deleteView,
+  findView,
+  getViewFrom,
+  upsertView,
+  projectNameExists,
+  viewNameExists,
+  type StoredProject,
+} from "./lib/projectsStore";
 // Monaco is heavy (~700KB gzipped) — load it only when a database is open
 // and a data tab renders the editor, keeping the drop-zone page instant.
 const SqlEditor = lazy(() =>
@@ -19,71 +36,26 @@ import { StructureTab } from "./components/StructureTab";
 import { RecordDrawer } from "./components/RecordDrawer";
 import { buildSchemaCatalog, setSchemaCatalog } from "./lib/sqlCompletions";
 import { initWebMcpTools, setWebMcpController, buildPagedQuery } from "./lib/webmcp";
-import { setVisualizeDb } from "./lib/visualizeState";
 import { aiClient } from "./lib/aiClient";
+import { suggestViewName } from "./lib/aiViewName";
+import { useAiStatus } from "./hooks/useAiStatus";
 import { AiStatusPill } from "./components/AiStatusPill";
-import { DocsPage } from "./components/DocsPage";
-import { AboutPage } from "./components/AboutPage";
 import { assetUrl } from "./lib/assetUrl";
+import { siteUrl, sitePathname, sitePushState } from "./lib/siteUrl";
+import { trackEvent } from "./lib/analytics";
 
 let tabIdCounter = 0;
 function nextTabId() {
   return `tab-${++tabIdCounter}`;
 }
 
-// Minimal hash routing: "" (app), "#/visualize" (ERD), "#/docs"
-// (documentation), "#/about". Docs anchors look like "#/docs?structure-tab" —
-// hashchange re-scrolls.
-type Route = { page: "app" | "docs" | "about" | "visualize"; anchor: string | null };
-function parseHash(): Route {
-  const hash = window.location.hash;
-  if (hash.startsWith("#/docs")) {
-    const anchor = hash.startsWith("#/docs?") ? hash.slice("#/docs?".length) : null;
-    return { page: "docs", anchor };
-  }
-  if (hash.startsWith("#/about")) return { page: "about", anchor: null };
-  if (hash.startsWith("#/visualize")) return { page: "visualize", anchor: null };
-  return { page: "app", anchor: null };
-}
-
-function useHashRoute(): Route {
-  const [route, setRoute] = useState<Route>(() => parseHash());
-  useEffect(() => {
-    const onHashChange = () => {
-      setRoute(parseHash());
-      const { page, anchor } = parseHash();
-      if (page === "docs" && anchor) {
-        // scrollIntoView walks up to the nearest scrollable ancestor (the
-        // page's main container — the window itself is overflow:hidden).
-        requestAnimationFrame(() => {
-          document.getElementById(anchor)?.scrollIntoView({ block: "start" });
-        });
-      } else {
-        document.getElementById("page-scroll")?.scrollTo({ top: 0 });
-        window.scrollTo(0, 0);
-      }
-    };
-    window.addEventListener("hashchange", onHashChange);
-    return () => window.removeEventListener("hashchange", onHashChange);
-  }, []);
-  return route;
-}
+// Legacy hash URLs (#/docs, #/docs?<anchor>, #/about) redirect to the real
+// /docs and /about pages — prerendered since the SSG conversion — preserving
+// deep-link anchors as a query param.
 
 let sqlTabCounter = 0;
 function nextSqlTitle() {
   return `SQL ${++sqlTabCounter}`;
-}
-
-const SQLITE_HEADER = "SQLite format 3\u0000";
-
-function looksLikeSqlite(data: ArrayBuffer | Uint8Array): boolean {
-  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
-  if (bytes.length < 16) return false;
-  const expected = SQLITE_HEADER.split("").map((c) => c.charCodeAt(0));
-  for (let i = 0; i < 15; i++) {
-    if (bytes[i] !== expected[i]) return false;
-  }
-  return true;
 }
 
 function formatBytes(bytes: number): string {
@@ -93,14 +65,28 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
+function Explorer({ cliMode = false }: { cliMode?: boolean }) {
   const { showToast } = useToast();
-
   // Synchronous re-entry guard (state updates are async, so two drops in the
   // same tick would otherwise start two concurrent loads of the same file).
   const busyRef = useRef(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // Latest openDatabase closure, readable from the stable handover listener.
+  const openDatabaseRef = useRef<
+    ((opener: (onProgress: (p: OpenProgress) => void) => Promise<TableInfo[]>, fname: string) => Promise<void>) | null
+  >(null);
   const [hasDb, setHasDb] = useState(false);
   const [filename, setFilename] = useState<string | null>(null);
+
+  // Legacy hash URLs (#/docs, #/docs?<anchor>, #/about) redirect to the real
+  // /docs and /about pages, preserving deep-link anchors.
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (!hash.startsWith("#/docs") && !hash.startsWith("#/about")) return;
+    const target = hash.startsWith("#/docs") ? "/docs" : "/about";
+    const anchor = hash.startsWith("#/docs?") ? hash.slice("#/docs?".length) : null;
+    window.location.replace(anchor ? `${target}?${anchor}` : target);
+  }, []);
 
   const [tables, setTables] = useState<TableInfo[]>([]);
   const [tabs, setTabs] = useState<Tab[]>([]);
@@ -120,18 +106,84 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
   // Sidebar table filter — driven by the WebMCP list_tables tool.
   const [tableFilter, setTableFilter] = useState("");
 
-  // Left-menu section: Data (tabs + grids) or Diagram (ERD page). Derived
-  // from the hash route so the URL stays the single source of truth — the
-  // sidebar switcher just sets "#/visualize" or "#/".
-  const section: "data" | "diagram" = routePage === "visualize" ? "diagram" : "data";
+  // Draggable sidebar width (px), managed by the SidebarResizer handle.
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
 
-  const handleSectionChange = useCallback((next: "data" | "diagram") => {
-    if (next === "diagram") {
-      if (window.location.hash !== "#/visualize") window.location.hash = "#/visualize";
-    } else if (window.location.hash !== "" && window.location.hash !== "#/") {
-      window.location.hash = "#/";
+  // Projects & views (persisted in localStorage). A project groups saved SQL
+  // views; opening one swaps the sidebar's Projects list for its Views list
+  // and shows the view editor in the main pane.
+  const [projects, setProjects] = useState<StoredProject[]>(() => listProjects());
+  // Deep-link bootstrap: /explorer?project=<id>&view=<viewId> restores the
+  // project's Views list and the view editor on first render (projects live
+  // in localStorage, so they survive reloads). ?table= and ?tab= describe
+  // database tabs, which only exist after a file is opened, so those cannot
+  // be restored — a follow-up effect just strips stale params from the URL.
+  const [initialRoute] = useState(() => {
+    if (cliMode) return { project: null as string | null, view: null as string | null, sql: "" };
+    const params = new URLSearchParams(window.location.search);
+    const projectId = params.get("project");
+    if (!projectId || !listProjects().some((p) => p.id === projectId)) {
+      return { project: null, view: null, sql: "" };
     }
-  }, []);
+    const viewId = params.get("view");
+    const found = viewId ? findView(projectId, viewId) : null;
+    return { project: projectId, view: found ? viewId : null, sql: found?.view.sql ?? "" };
+  });
+  const [projectsMode, setProjectsMode] = useState<ProjectsSectionMode>(() =>
+    initialRoute.project ? "views" : "projects"
+  );
+  const [openProjectId, setOpenProjectId] = useState<string | null>(() => initialRoute.project);
+  const [activeViewId, setActiveViewId] = useState<string | null>(() => initialRoute.view);
+  const [viewSql, setViewSql] = useState(initialRoute.sql);
+  const [viewSavedSql, setViewSavedSql] = useState(initialRoute.sql);
+  const [viewResult, setViewResult] = useState<{ result: QueryResult; error: string | null } | null>(null);
+  const [viewEditorOpen, setViewEditorOpen] = useState(() => initialRoute.view != null);
+  const viewDirty = viewSql !== viewSavedSql;
+
+  /**
+   * Reflect the current selection in the /explorer URL as query params so
+   * states are shareable and the Back button walks the selection history:
+   *   ?table=<name>                 a data/structure table tab
+   *   ?project=<id>                 an opened project (views list)
+   *   ?project=<id>&view=<viewId>   an opened view in the editor
+   *   ?tab=<position>               a tab with no table/view (e.g. SQL tabs)
+   * Every user action that changes the selection pushes a history entry.
+   */
+  const pushSelectionUrl = useCallback(
+    (selection: { table?: string | null; project?: string | null; view?: string | null; tabPosition?: number | null }) => {
+      if (cliMode) return; // local.html has no /explorer route to refresh into
+      const tabPosition =
+        selection.tabPosition != null && selection.tabPosition >= 0 ? String(selection.tabPosition) : null;
+      sitePushState(
+        "/explorer",
+        false,
+        {
+          table: selection.table ?? null,
+          project: selection.project ?? null,
+          view: selection.view ?? null,
+          tab: tabPosition,
+        }
+      );
+    },
+    [cliMode]
+  );
+
+  // Browser-only SPA: reading localStorage lazily at first render is safe.
+  // After every mutation we re-read with setProjects(listProjects()).
+
+  // Modals: create-project, save-existing-view options, name-new-view,
+  // and the "no project open" prompt shown when saving without one.
+  const [projectModalOpen, setProjectModalOpen] = useState(false);
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const [viewNameModalOpen, setViewNameModalOpen] = useState(false);
+  const [noProjectModalOpen, setNoProjectModalOpen] = useState(false);
+  // SQL the pending save came from — the Save button exists on every SQL
+  // editor (view editor and plain data tabs), so this pins the source text.
+  const [saveEditorSql, setSaveEditorSql] = useState<string | null>(null);
+  // AI-suggested view name, filled in while the name modal is open.
+  const [aiSuggestion, setAiSuggestion] = useState("");
+  const { status: aiStatus } = useAiStatus();
+  const aiEnabled = aiStatus === "ready";
 
   // Right-side drawer showing one record in form view.
   const [recordDrawer, setRecordDrawer] = useState<{
@@ -145,21 +197,24 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
     initWebMcpTools();
   }, []);
 
-  // Preload the local SQL model (WebLLM) in the background at boot — before
+  // Preload the local SQL model (WebLLM, served from cdn.lucasschirm.com) in
+  // the background at boot — before
   // any database is opened. Fire-and-forget: downloads are cached by the
   // browser, failures only dim the status pill, nothing blocks the UI.
+  // Skipped in CLI mode: local.html boots straight into an open database.
   useEffect(() => {
+    if (cliMode) return;
     aiClient.preload(assetUrl(""));
   }, []);
 
-  // Load a database from a blob (File or fetched file) via the worker.
-  // The blob is handed over by reference — nothing is read into memory here.
-  const loadDbFromBlob = useCallback(
-    async (blob: Blob, fname: string) => {
+  // Open a database via the worker. `opener` abstracts the source: a local
+  // blob (site) or an HTTP range-backed URL (sqlitexp CLI).
+  const openDatabase = useCallback(
+    async (opener: (onProgress: (p: OpenProgress) => void) => Promise<TableInfo[]>, fname: string) => {
       try {
         setBusy({ message: "Opening database", detail: `${fname} — pages load on demand` });
 
-        const tables = await dbClient.open(blob, fname, (p: OpenProgress) => {
+        const tables = await opener((p: OpenProgress) => {
           setBusy({ message: "Opening database", detail: `${fname} — ${p.detail}` });
         });
 
@@ -174,21 +229,13 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
         setBusy(null);
         showToast("success", `Loaded "${fname}" — ${tables.length} tables`);
 
-        // Capture the schema for the /visualize ERD page. DDL text (not the
-        // binary file) is handed over — the ERD parses SQL client-side, so no
-        // database bytes are re-read or duplicated on that page.
-        try {
-          const ddl = await dbClient.query(
-            `SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'view' THEN 1 ELSE 2 END, name`
-          );
-          const schemaSql = ddl.rows
-            .map((r) => String(r[0] ?? ""))
-            .filter((s) => s.length > 0)
-            .join(";\n\n") + ";";
-          setVisualizeDb({ name: fname, schemaSql, tables });
-        } catch (err) {
-          console.error("Failed to capture schema for the diagram view:", err);
-          setVisualizeDb({ name: fname, schemaSql: null, tables });
+        // The page “moves” to /explorer once a database is open: the drop
+        // zone lives at /, the explorer at /explorer — as a new history
+        // entry, so Back returns to the upload page (see the popstate
+        // handler below). Skipped in CLI mode: local.html has no /explorer
+        // route on the sqlitexp server.
+        if (!cliMode && !sitePathname().endsWith("/explorer")) {
+          sitePushState("/explorer");
         }
 
         // Build the SQL completion catalog in the background (schema only,
@@ -198,18 +245,53 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
         });
       } catch (err) {
         console.error("Failed to open SQLite database:", err);
-        // Drop any previously captured schema so the diagram page never
-        // advertises a database that is no longer open.
-        setVisualizeDb({ name: null, schemaSql: null, tables: [] });
         setBusy(null);
         showToast(
           "error",
           `Failed to open database: ${err instanceof Error ? err.message : String(err)}`
         );
+      }  }, [cliMode, showToast]);
+
+  // Keep the handover listener's view of openDatabase current.
+  useEffect(() => {
+    openDatabaseRef.current = openDatabase;
+  });
+
+  // CLI mode: the sqlitexp server pre-opens a database — boot straight into
+  // the explorer (the drop zone only appears if the open fails).
+  useEffect(() => {
+    if (!cliMode) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/boot");
+        if (!res.ok) throw new Error(`HTTP ${res.status} from /api/boot`);
+        const boot = (await res.json()) as { name: string; url: string };
+        if (cancelled) return;
+        await openDatabase((onP) => dbClient.openRemote(boot.url, boot.name, onP), boot.name);
+      } catch (err) {
+        console.error("CLI boot failed:", err);
+        if (cancelled) return;
+        setBusy(null);
+        showToast("error", `Failed to open database: ${err instanceof Error ? err.message : String(err)}`);
       }
-    },
-    [showToast]
-  );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [cliMode, openDatabase, showToast]);
+
+  // Accept database handovers from other windows (popups/iframes of host
+  // pages — see examples/sqlite-handover). Mounted once; the allowed origins
+  // are parsed from the URL at boot and the callback goes through a ref so a
+  // changing openDatabase identity never re-registers the listener.
+  useEffect(() => {
+    return initHandoverReceiver((blob, name) => {
+      const open = openDatabaseRef.current;
+      if (!open) return;
+      void open(() => dbClient.open(blob, name), name);
+    }, { allowedOrigins: allowedOriginsFromLocation() });
+  }, []);
 
   // Handle file selection/drop
   const handleFilePicked = useCallback(
@@ -244,9 +326,9 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
         // 2) Hand the file reference to the worker. SQLite reads pages on
         //    demand through the blob VFS, so multi-GB files open instantly
         //    with no whole-file read.
-        await loadDbFromBlob(file, file.name);
+        await openDatabase((onP) => dbClient.open(file, file.name, onP), file.name);
       } catch (err) {
-        // loadDbFromBlob reports open failures itself; this catch handles
+        // openDatabase reports open failures itself; this catch handles
         // everything before that (header validation).
         setBusy(null);
         showToast("error", err instanceof Error ? err.message : String(err));
@@ -254,7 +336,7 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
         busyRef.current = false;
       }
     },
-    [showToast, loadDbFromBlob]
+    [showToast, openDatabase]
   );
 
   // Load the bundled demo database
@@ -275,7 +357,7 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
       if (!looksLikeSqlite(buffer)) {
         throw new Error("Bundled demo.db failed validation");
       }
-      await loadDbFromBlob(new Blob([buffer]), "demo.db");
+      await openDatabase((onP) => dbClient.open(new Blob([buffer]), "demo.db", onP), "demo.db");
     } catch (err) {
       console.error("Failed to load demo database:", err);
       setBusy(null);
@@ -286,7 +368,7 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
     } finally {
       busyRef.current = false;
     }
-  }, [showToast, loadDbFromBlob]);
+  }, [showToast, openDatabase]);
 
   // Async query helpers -------------------------------------------------------
 
@@ -316,6 +398,8 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
         const existing = tabs.find((t) => t.type === "data" && t.tableName === tableName);
         if (existing) {
           setActiveTabId(existing.id);
+          pushSelectionUrl({ table: tableName });
+          trackEvent("open_table", { table_name: tableName });
           return;
         }
         setBusy({ message: `Loading table "${tableName}"`, detail: null });
@@ -324,6 +408,10 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
         const newTab: Tab = { id, type: "data", title: tableName, tableName, sql };
         setTabs((prev) => [...prev, newTab]);
         setActiveTabId(id);
+        setViewEditorOpen(false); // table click takes over the main pane
+        setActiveViewId(null); // and deselects any open view
+        pushSelectionUrl({ table: tableName });
+        trackEvent("open_table", { table_name: tableName });
         void runTableQuery(id, sql).finally(() => setBusy(null));
       } catch (err) {
         console.error("Failed to open data tab:", err);
@@ -331,7 +419,7 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
         showToast("error", `Failed to open table: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [tabs, showToast, runTableQuery]
+    [tabs, showToast, runTableQuery, pushSelectionUrl]
   );
 
   // Open structure tab
@@ -344,6 +432,7 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
         const existing = tabs.find((t) => t.type === "structure" && t.tableName === tableName);
         if (existing) {
           setActiveTabId(existing.id);
+          pushSelectionUrl({ table: tableName });
           return;
         }
         setBusy({ message: `Analyzing structure of "${tableName}"`, detail: null });
@@ -356,6 +445,9 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
 
         setTabs((prev) => [...prev, newTab]);
         setActiveTabId(structureId);
+        setViewEditorOpen(false); // table click takes over the main pane
+        setActiveViewId(null); // and deselects any open view
+        pushSelectionUrl({ table: tableName });
 
         const columnsRes = await dbClient.query(`PRAGMA table_info("${tableName}")`);
         const indexListRes = await dbClient.query(`PRAGMA index_list("${tableName}")`);
@@ -396,7 +488,7 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
         showToast("error", `Failed to read structure of "${tableName}": ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [tabs, showToast]
+    [tabs, showToast, pushSelectionUrl]
   );
 
   // Open the record drawer for a table row
@@ -438,6 +530,10 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
         setBusy({ message: "Running query", detail: null });
         await runTableQuery(tabId, sql);
         setTabs((prev) => prev.map((t) => (t.id === tabId ? { ...t, sql } : t)));
+        trackEvent("execute_sql", {
+          sql_length: sql.length,
+          table_name: tabs.find((t) => t.id === tabId)?.tableName || undefined,
+        });
       } catch (err) {
         console.error("Failed to run query:", err);
         showToast("error", `Query failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -445,7 +541,7 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
         setBusy(null);
       }
     },
-    [showToast, runTableQuery]
+    [showToast, runTableQuery, tabs]
   );
 
   // Close tab
@@ -488,6 +584,12 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
           setTabs((prev) => [...prev, { id, type: "data", title, tableName: "", sql }]);
         }
         setActiveTabId(id);
+        // New tab lands at the end of the strip; an existing one keeps its
+        // own position.
+        const tabPosition = existing
+          ? tabs.findIndex((t) => t.id === id)
+          : tabs.length;
+        pushSelectionUrl({ tabPosition: tabPosition >= 0 ? tabPosition : null });
         const result = await dbClient.query(paged.pageSql);
         setTabResults((prev) => ({ ...prev, [id]: { result, error: null } }));
       } catch (err) {
@@ -495,7 +597,7 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
         showToast("error", err instanceof Error ? err.message : String(err));
       }
     },
-    [tabs, showToast]
+    [tabs, showToast, pushSelectionUrl]
   );
 
   // Keep the WebMCP tool controller pointed at the latest app state/actions.
@@ -510,15 +612,299 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
     });
   });
 
-  // Diagram node click → back to the explorer with the table's Data tab open.
-  // Setting the hash triggers the route re-render; the tab state update batches
-  // into the same render, so the explorer lands directly on that table.
-  const handleOpenTableFromDiagram = useCallback(
-    (tableName: string) => {
-      handleSectionChange("data");
-      openDataTab(tableName);
+  // Projects & views -----------------------------------------------------------
+
+  /** Run a view's SQL in the main-pane editor and record it as saved state. */
+  const runViewSql = useCallback(async (sql: string) => {
+    try {
+      setBusy({ message: "Running query", detail: null });
+      const result = await dbClient.query(sql);
+      setViewResult({ result, error: null });
+    } catch (err) {
+      setViewResult({
+        result: { columns: [], rows: [] },
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setBusy(null);
+      // A manual run re-baselines the dirty badge, mirroring tab behavior.
+      setViewSavedSql(sql);
+    }
+  }, []);
+
+  /** Clear the view editor back to a fresh, closed state. */
+  const resetViewEditor = useCallback(() => {
+    setActiveViewId(null);
+    setViewEditorOpen(false);
+    setViewSql("");
+    setViewSavedSql("");
+    setViewResult(null);
+  }, []);
+
+  // Navigating away from /explorer via the browser's Back/Forward buttons
+  // acts like leaving the page: the database is closed and the drop zone
+  // renders again. All resets below are idempotent, so the handler works for
+  // both Back (exit to /) and Forward (re-enter the already-traversed URL).
+  useEffect(() => {
+    if (cliMode) return; // CLI boots straight into the explorer; no routing
+    const onPopState = () => {
+      if (sitePathname().endsWith("/explorer")) return;
+      setHasDb(false);
+      setFilename(null);
+      setTables([]);
+      setTabs([]);
+      setActiveTabId(null);
+      setTabResults({});
+      setStructureData({});
+      setRecordDrawer(null);
+      resetViewEditor();
+      void dbClient.close();
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [cliMode, resetViewEditor]);
+
+  // Deep-link URL cleanup: project/view params that no longer resolve are
+  // stale (deleted since the URL was shared), and ?table=/ ?tab= can never
+  // be restored before a database is opened. Strip them so a reload doesn't
+  // advertise state that isn't there. No state changes — the restore itself
+  // happens in the initialRoute-based lazy initializers above.
+  useEffect(() => {
+    if (cliMode) return;
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("project") && !params.has("view")) return;
+    const projectId = params.get("project");
+    const viewId = params.get("view");
+    if (!projectId || !listProjects().some((p) => p.id === projectId)) {
+      sitePushState("/explorer", true, { project: null, view: null, table: null, tab: null });
+    } else if (viewId && !findView(projectId, viewId)) {
+      sitePushState("/explorer", true, { view: null, table: null, tab: null });
+    }
+  }, [cliMode]);
+
+  const openProjectViews = useCallback(
+    (projectId: string) => {
+      resetViewEditor();
+      setProjectsMode("views");
+      setOpenProjectId(projectId);
+      pushSelectionUrl({ project: projectId });
+      trackEvent("open_project", { project_id: projectId });
     },
-    [handleSectionChange, openDataTab]
+    [resetViewEditor, pushSelectionUrl]
+  );
+
+  const closeProjectViews = useCallback(() => {
+    resetViewEditor();
+    setProjectsMode("projects");
+    setOpenProjectId(null);
+    pushSelectionUrl({ project: null, view: null });
+  }, [resetViewEditor, pushSelectionUrl]);
+
+  /** Continue a save that started with no project open. */
+  const resumePendingSave = useCallback(
+    (sql: string) => {
+      setActiveViewId(null);
+      setViewEditorOpen(true);
+      setViewSql(sql);
+      setViewSavedSql("");
+      setViewResult(null);
+      setAiSuggestion("");
+      setViewNameModalOpen(true);
+      setSaveEditorSql(null);
+    },
+    []
+  );
+
+  const handleCreateProject = useCallback(
+    (name: string) => {
+      try {
+        const project = createProject(name);
+        setProjectModalOpen(false);
+        setProjects(listProjects());
+        openProjectViews(project.id);
+        trackEvent("create_project", { project_id: project.id, project_name: project.name });
+        // A save started with no project open: resume it in the new project.
+        if (saveEditorSql != null) {
+          resumePendingSave(saveEditorSql);
+        }
+        showToast("success", `Project "${project.name}" created`);
+      } catch (err) {
+        console.error("Failed to create project:", err);
+        showToast("error", `Failed to create project: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [openProjectViews, resumePendingSave, saveEditorSql, showToast]
+  );
+
+  const handleDeleteProject = useCallback(
+    (projectId: string) => {
+      try {
+        const name = projects.find((p) => p.id === projectId)?.name ?? "project";
+        deleteProject(projectId);
+        setProjects(listProjects());
+        // closeProjectViews also exits views mode and clears the open project.
+        if (openProjectId === projectId) closeProjectViews();
+        showToast("success", `Deleted project "${name}"`);
+      } catch (err) {
+        console.error("Failed to delete project:", err);
+        showToast("error", `Failed to delete project: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [projects, openProjectId, closeProjectViews, showToast]
+  );
+
+  /** Create-view button (Views section): empty editor on the right. */
+  const handleStartCreateView = useCallback(() => {
+    if (!openProjectId) return;
+    setActiveViewId(null);
+    setViewSql("");
+    setViewSavedSql("");
+    setViewResult(null);
+    setViewEditorOpen(true);
+  }, [openProjectId]);
+
+  /** Click an existing view: open with its SQL filled in and executed. */
+  const handleSelectView = useCallback(
+    (projectId: string, viewId: string) => {
+      const found = findView(projectId, viewId);
+      if (!found) {
+        showToast("error", "That view no longer exists");
+        setProjects(listProjects());
+        return;
+      }
+      setProjectsMode("views");
+      setOpenProjectId(projectId);
+      setActiveViewId(viewId);
+      setViewEditorOpen(true);
+      setViewSql(found.view.sql);
+      setViewSavedSql(found.view.sql);
+      setViewResult(null);
+      pushSelectionUrl({ project: projectId, view: viewId });
+      void runViewSql(found.view.sql);
+    },
+    [runViewSql, showToast, pushSelectionUrl]
+  );
+
+  const handleCloseViewEditor = useCallback(() => {
+    resetViewEditor();
+    pushSelectionUrl({ view: null });
+  }, [resetViewEditor, pushSelectionUrl]);
+
+  /**
+   * Save button / Ctrl+Cmd+S from any SQL editor. No project open → invite to
+   * create one; existing view selected → options modal; otherwise name modal.
+   */
+  const handleSaveViewClicked = useCallback(
+    (sql: string) => {
+      if (!sql.trim()) {
+        showToast("info", "Write some SQL first");
+        return;
+      }
+      setSaveEditorSql(sql);
+      if (!openProjectId) {
+        setNoProjectModalOpen(true);
+      } else if (activeViewId != null) {
+        setSaveModalOpen(true);
+      } else {
+        setAiSuggestion("");
+        setViewNameModalOpen(true);
+      }
+    },
+    [openProjectId, activeViewId, showToast]
+  );
+
+  // While the name modal is open, ask the local AI for a view-name suggestion
+  // (only when the model is ready — otherwise the field stays empty).
+  useEffect(() => {
+    if (!viewNameModalOpen || !aiEnabled) return;
+    let cancelled = false;
+    void suggestViewName(saveEditorSql ?? viewSql).then((name) => {
+      if (!cancelled) setAiSuggestion(name);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewNameModalOpen, aiEnabled, saveEditorSql, viewSql]);
+
+  /** SaveOptionsModal → Save: update the existing view (name + SQL) in place. */
+  const handleSaveExistingView = useCallback(
+    (name: string) => {
+      if (!openProjectId || activeViewId == null) return;
+      try {
+        upsertView(openProjectId, activeViewId, name, saveEditorSql ?? viewSql);
+        setSaveModalOpen(false);
+        setSaveEditorSql(null);
+        setProjects(listProjects());
+        setViewSavedSql(saveEditorSql ?? viewSql);
+        showToast("success", `View "${name}" saved`);
+      } catch (err) {
+        console.error("Failed to save view:", err);
+        showToast("error", `Failed to save view: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [openProjectId, activeViewId, saveEditorSql, viewSql, showToast]
+  );
+
+  /** SaveOptionsModal → Create new view → same name modal as a new view. */
+  const handleSaveAsNewView = useCallback(() => {
+    setSaveModalOpen(false);
+    setActiveViewId(null); // save as a brand-new view, don't touch the existing one
+    setAiSuggestion("");
+    setViewNameModalOpen(true);
+  }, []);
+
+  /** NameModal confirm for a (new) view name. */
+  const handleSaveNamedView = useCallback(
+    (name: string) => {
+      if (!openProjectId) return;
+      const sql = saveEditorSql ?? viewSql;
+      try {
+        const saved = upsertView(openProjectId, activeViewId, name, sql);
+        setViewNameModalOpen(false);
+        setSaveEditorSql(null);
+        setProjects(listProjects());
+        // Only the view editor tracks selection/saved state — a save from a
+        // plain data tab leaves that tab as-is.
+        if (viewEditorOpen) {
+          setActiveViewId(saved.id);
+          setViewSavedSql(sql);
+        }
+        pushSelectionUrl({ project: openProjectId, view: saved.id });
+        showToast("success", `View "${saved.name}" saved`);
+      } catch (err) {
+        console.error("Failed to save view:", err);
+        showToast("error", `Failed to save view: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [openProjectId, activeViewId, saveEditorSql, viewSql, viewEditorOpen, pushSelectionUrl, showToast]
+  );
+
+  /** Shared duplicate-name check for both save modals. */
+  const validateViewName = useCallback(
+    (name: string) =>
+      openProjectId && viewNameExists(openProjectId, name, activeViewId ?? undefined)
+        ? `A view named “${name}” already exists in this project`
+        : null,
+    [openProjectId, activeViewId]
+  );
+
+  const handleDeleteView = useCallback(
+    (projectId: string, viewId: string) => {
+      try {
+        const name = getViewFrom(projects, projectId, viewId)?.name ?? "view";
+        deleteView(projectId, viewId);
+        setProjects(listProjects());
+        if (activeViewId === viewId) {
+          resetViewEditor();
+          pushSelectionUrl({ view: null });
+        }
+        showToast("success", `Deleted view "${name}"`);
+      } catch (err) {
+        console.error("Failed to delete view:", err);
+        showToast("error", `Failed to delete view: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [projects, activeViewId, resetViewEditor, pushSelectionUrl, showToast]
   );
 
   // Row double-click → record drawer
@@ -611,36 +997,63 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
   }, [handleFilePicked]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
+  const activeView = getViewFrom(projects, openProjectId, activeViewId);
   const filterText = tableFilter.trim().toLowerCase();
   const visibleTables = filterText
     ? tables.filter((t) => t.name.toLowerCase().includes(filterText))
     : tables;
 
-  if (!hasDb) {
-    if (routePage === "visualize") {
-      // Deep link to the diagram with nothing open — show its empty state.
-      return (
-        <div className="h-screen w-screen flex flex-col bg-gray-50">
-          <header className="px-6 py-3 bg-gray-900 text-white flex items-center gap-3 shrink-0">
-            <span className="text-lg">🗄️</span>
-            <h1 className="text-sm font-semibold">SQLite Explorer</h1>
-            <nav className="ml-auto flex items-center gap-4 text-xs">
-              <a href="#/docs" className="text-gray-300 hover:text-white transition-colors">Docs</a>
-              <a href="#/about" className="text-gray-300 hover:text-white transition-colors">About</a>
-            </nav>
-          </header>
-          <VisualizePage onOpenTable={handleOpenTableFromDiagram} />
-        </div>
-      );
+  // Tab switching: plain setActiveTabId is used by TabBar and any other
+  // selection change without a more specific URL destination. The URL gets
+  // ?table= for table tabs, ?project=/?view= when a view editor is open, or
+  // ?tab=<position> for tabs unrelated to a table or view (e.g. SQL tabs).
+  const handleTabSelected = useCallback(
+    (tabId: string) => {
+      setActiveTabId(tabId);
+      // While the view editor is open it owns the main pane, so the URL keeps
+      // describing the view rather than the tab that was clicked.
+      if (viewEditorOpen && openProjectId) {
+        pushSelectionUrl({ project: openProjectId, view: activeViewId });
+        return;
+      }
+      const tab = tabs.find((t) => t.id === tabId);
+      if (tab?.tableName) {
+        pushSelectionUrl({ table: tab.tableName });
+      } else {
+        // Tabs unrelated to a table or view (e.g. SQL tabs) are addressed by
+        // their position in the tab strip.
+        const position = tabs.findIndex((t) => t.id === tabId);
+        pushSelectionUrl({ tabPosition: position >= 0 ? position : null });
+      }
+    },
+    [tabs, viewEditorOpen, openProjectId, activeViewId, pushSelectionUrl]
+  );
+
+  // Tab title mirrors the current selection:
+  //   table tab open  → "<tableName> | <file>"
+  //   saved view open → "<viewName> | <file>"
+  //   otherwise       → "<file>"
+  // With no database open the page's own static <title> (prerendered per
+  // route, e.g. the landing page or the CLI viewer) is restored.
+  const [defaultTitle] = useState(() => document.title);
+  useEffect(() => {
+    if (!filename) {
+      document.title = defaultTitle;
+      return;
     }
+    const selection = activeTab?.tableName ?? (viewEditorOpen ? activeView?.name ?? null : null);
+    document.title = selection ? `${selection} | ${filename}` : filename;
+  }, [filename, activeTab, viewEditorOpen, activeView, defaultTitle]);
+
+  if (!hasDb) {
     return (
       <div className="h-screen w-screen flex flex-col bg-gray-50">
         <header className="px-6 py-3 bg-gray-900 text-white flex items-center gap-3 shrink-0">
           <span className="text-lg">🗄️</span>
           <h1 className="text-sm font-semibold">SQLite Explorer</h1>
           <nav className="ml-auto flex items-center gap-4 text-xs">
-            <a href="#/docs" className="text-gray-300 hover:text-white transition-colors">Docs</a>
-            <a href="#/about" className="text-gray-300 hover:text-white transition-colors">About</a>
+            <a href={siteUrl("/docs")} className="text-gray-300 hover:text-white transition-colors">Docs</a>
+            <a href={siteUrl("/about")} className="text-gray-300 hover:text-white transition-colors">About</a>
           </nav>
         </header>
         <FileDropZone onPickFile={handleFilePicked} isLoading={busy != null} onDemo={handleLoadDemo} />
@@ -659,10 +1072,10 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
       <header className="px-4 py-2 bg-gray-900 text-white flex items-center gap-3 shrink-0">
         <span className="text-lg">🗄️</span>
         <h1 className="text-sm font-semibold">SQLite Explorer</h1>
-        <AiStatusPill />
+        {!cliMode && <AiStatusPill />}
         <nav className="flex items-center gap-4 text-xs">
-          <a href="#/docs" className="text-gray-300 hover:text-white transition-colors">Docs</a>
-          <a href="#/about" className="text-gray-300 hover:text-white transition-colors">About</a>
+          <a href={siteUrl("/docs")} className="text-gray-300 hover:text-white transition-colors">Docs</a>
+          <a href={siteUrl("/about")} className="text-gray-300 hover:text-white transition-colors">About</a>
         </nav>
         {filename && (
           <>
@@ -683,23 +1096,83 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
       </header>
 
       {/* Body */}
-      <div className="flex flex-1 min-h-0">
+      <div ref={bodyRef} className="flex flex-1 min-h-0">
         <Sidebar
+          width={sidebarWidth}
           tables={visibleTables}
           filteredFrom={tables.length}
           activeTable={activeTab?.tableName ?? null}
-          section={section}
           onSelectTable={openDataTab}
           onSelectStructure={openStructureTab}
-          onSectionChange={handleSectionChange}
+          projects={projects}
+          projectsMode={projectsMode}
+          openProject={projects.find((p) => p.id === openProjectId) ?? null}
+          activeViewId={activeViewId}
+          onOpenProject={openProjectViews}
+          onCloseProject={closeProjectViews}
+          onCreateProject={() => setProjectModalOpen(true)}
+          onDeleteProject={handleDeleteProject}
+          onCreateView={handleStartCreateView}
+          onSelectView={handleSelectView}
+          onDeleteView={handleDeleteView}
         />
-        {section === "diagram" && (
-          <VisualizePage onOpenTable={handleOpenTableFromDiagram} />
-        )}
-        {section === "data" && (
-          <div className="flex flex-col flex-1 min-w-0 min-h-0">
-            <TabBar tabs={tabs} activeTabId={activeTabId} onSelectTab={setActiveTabId} onCloseTab={handleCloseTab} />
-          {activeTab ? (
+        <SidebarResizer
+          containerRef={bodyRef}
+          width={sidebarWidth}
+          onResize={setSidebarWidth}
+        />
+        <div className="flex flex-col flex-1 min-w-0 min-h-0">
+          <TabBar tabs={tabs} activeTabId={activeTabId} onSelectTab={handleTabSelected} onCloseTab={handleCloseTab} />
+          {viewEditorOpen && openProjectId ? (
+            <div className="flex flex-col flex-1 min-h-0">
+              {/* View editor header: title, dirty badge, row count/error, close × */}
+              <div className="px-4 py-2 flex items-center gap-2 border-b border-gray-200 bg-gray-50 shrink-0">
+                <span className="text-sm">🔎</span>
+                <span className="text-xs font-semibold text-gray-700 truncate">
+                  {activeView
+                    ? `View: ${activeView.name}`
+                    : viewSavedSql
+                      ? "View: Untitled"
+                      : "New view"}
+                </span>
+                {viewDirty && (
+                  <span className="text-[10px] uppercase font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
+                    Unsaved
+                  </span>
+                )}
+                <div className="ml-auto flex items-center gap-3">
+                  {viewResult?.error ? (
+                    <span className="text-xs text-red-600 truncate max-w-[280px]" title={viewResult.error}>
+                      {viewResult.error}
+                    </span>
+                  ) : viewResult ? (
+                    <span className="text-xs text-gray-400">
+                      {viewResult.result.rows.length} row{viewResult.result.rows.length !== 1 ? "s" : ""}
+                    </span>
+                  ) : null}
+                  <button
+                    onClick={handleCloseViewEditor}
+                    aria-label="Close view editor"
+                    title="Close view"
+                    className="w-7 h-7 flex items-center justify-center rounded text-gray-400 hover:text-gray-700 hover:bg-gray-200 transition-colors text-lg leading-none shrink-0"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+              <Suspense fallback={<div className="h-[180px] border-b border-gray-200 bg-gray-50 animate-pulse" />}>
+                <SqlEditor
+                  initialSql={viewSql}
+                  isEditable
+                  onRun={(sql) => void runViewSql(sql)}
+                  onSave={handleSaveViewClicked}
+                  onSqlChange={setViewSql}
+                  error={null}
+                />
+              </Suspense>
+              <DataGrid columns={viewResult?.result.columns ?? []} rows={viewResult?.result.rows ?? []} />
+            </div>
+          ) : activeTab ? (
             <div className="flex flex-col flex-1 min-h-0">
               {activeTab.type === "data" && (
                 <Suspense fallback={<div className="h-[180px] border-b border-gray-200 bg-gray-50 animate-pulse" />}>
@@ -708,6 +1181,7 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
                     initialSql={activeTab.sql ?? ""}
                     isEditable
                     onRun={(sql) => void handleRunQuery(activeTab.id, sql)}
+                    onSave={handleSaveViewClicked}
                     error={tabResults[activeTab.id]?.error ?? null}
                   />
                 </Suspense>
@@ -728,17 +1202,74 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
             </div>
           ) : (
             <div className="flex items-center justify-center flex-1 text-gray-400 text-sm">
-              Click a table in the sidebar to get started
+              {viewEditorOpen
+                ? "Open a project in the sidebar to manage its views"
+                : "Click a table in the sidebar to get started"}
             </div>
           )}
-          </div>
-        )}
+        </div>
       </div>
 
       <RecordDrawer
         drawer={recordDrawer}
         onClose={() => setRecordDrawer(null)}
       />
+
+      {/* Create-project modal — opens the new project's Views on save. */}
+      {projectModalOpen && (
+        <NameModal
+          title="Create a project"
+          description="Projects group your saved SQL views."
+          confirmLabel="Create"
+          validate={(name) => (projectNameExists(name) ? `A project named “${name}” already exists` : null)}
+          onConfirm={handleCreateProject}
+          onCancel={() => setProjectModalOpen(false)}
+        />
+      )}
+
+      {/* Saving with no project open: invite the user to create one. */}
+      {noProjectModalOpen && (
+        <NoProjectModal
+          onCreateProject={() => {
+            setNoProjectModalOpen(false);
+            setProjectModalOpen(true);
+          }}
+          onCancel={() => {
+            setNoProjectModalOpen(false);
+            setSaveEditorSql(null);
+          }}
+        />
+      )}
+
+      {/* Save-existing-view options: rename/update in place or fork as a new view. */}
+      {saveModalOpen && activeView && openProjectId && (
+        <SaveOptionsModal
+          viewName={activeView.name}
+          validate={validateViewName}
+          onSave={handleSaveExistingView}
+          onCreateNew={handleSaveAsNewView}
+          onCancel={() => {
+            setSaveModalOpen(false);
+            setSaveEditorSql(null);
+          }}
+        />
+      )}
+
+      {/* Name-a-view modal: new views and “Create new view” from the save modal. */}
+      {viewNameModalOpen && openProjectId && (
+        <NameModal
+          title="Save view"
+          description="Name this SQL query — it will be saved in the current project."
+          confirmLabel="Save"
+          suggestion={aiSuggestion}
+          validate={validateViewName}
+          onConfirm={handleSaveNamedView}
+          onCancel={() => {
+            setViewNameModalOpen(false);
+            setSaveEditorSql(null);
+          }}
+        />
+      )}
 
       <LoadingOverlay visible={busy != null} message={busy?.message ?? ""} detail={busy?.detail ?? fileDetail} indeterminate />
     </div>
@@ -747,50 +1278,10 @@ function DatabaseApp({ routePage }: { routePage: "app" | "visualize" }) {
 
 
 
-export default function WrappedApp() {
-  const route = useHashRoute();
-
-  if (route.page === "docs" || route.page === "about") {
-    return (
-      <div className="h-screen flex flex-col bg-white">
-        <header className="px-6 py-3 bg-gray-900 text-white flex items-center gap-3 shrink-0 z-10">
-          <a
-            href="#/"
-            className="flex items-center gap-3 text-white hover:opacity-90 transition-opacity"
-          >
-            <span className="text-lg">🗄️</span>
-            <h1 className="text-sm font-semibold">SQLite Explorer</h1>
-          </a>
-          <nav className="ml-auto flex items-center gap-4 text-xs">
-            <a
-              href="#/docs"
-              className={`transition-colors ${route.page === "docs" ? "text-white font-semibold" : "text-gray-300 hover:text-white"}`}
-            >
-              Docs
-            </a>
-            <a
-              href="#/about"
-              className={`transition-colors ${route.page === "about" ? "text-white font-semibold" : "text-gray-300 hover:text-white"}`}
-            >
-              About
-            </a>
-            <a
-              href="#/"
-              className="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded transition-colors"
-            >
-              ← Back to app
-            </a>
-          </nav>
-        </header>
-        <main id="page-scroll" className="flex-1 overflow-y-auto min-h-0">
-          {route.page === "docs" ? <DocsPage /> : <AboutPage />}
-        </main>
-      </div>
-    );
-  }
+export default function App({ cliMode = false }: { cliMode?: boolean }) {
   return (
     <ToastProvider>
-      <DatabaseApp routePage={route.page === "visualize" ? "visualize" : "app"} />
+      <Explorer cliMode={cliMode} />
     </ToastProvider>
   );
 }

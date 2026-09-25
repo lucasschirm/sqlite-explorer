@@ -1,10 +1,15 @@
 // Downloads the MLC-converted Qwen2.5-Coder-1.5B-Instruct (q4f16_1) weights
 // and config from Hugging Face plus the matching WebGPU model-lib WASM from
 // MLC's binary-libs repo, staging everything under
-// public/models/qwen25-coder-1.5b/resolve/main/ so the app serves the model
-// from its own origin (no HF at runtime). WebLLM's cleanModelUrl appends
+// public/models/qwen25-coder-1.5b/resolve/main/ for the CDN deploy.
+// WebLLM's cleanModelUrl appends
 // `resolve/main/` to any model URL that lacks it, so self-hosted layouts
 // must mirror the HuggingFace directory structure.
+//
+// The staged files under public/models/ are deployed to the dedicated CDN
+// Firebase site (cdn-b89da, https://cdn.lucasschirm.com) by
+// .github/workflows/firebase-hosting-cdn-merge.yml — which runs only when
+// this script changes — so bump/edit this file to (re)publish the weights.
 //
 // Usage: bun scripts/fetch-model.mjs
 import { mkdirSync, writeFileSync, createWriteStream, existsSync, statSync, unlinkSync } from "node:fs";

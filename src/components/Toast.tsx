@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useState } from "react";
+import { createContext, useCallback, useContext, useState, useSyncExternalStore } from "react";
 
 export type ToastType = "success" | "error" | "info";
 
@@ -22,8 +22,14 @@ export function useToast() {
 
 let nextToastId = 1;
 
+const subscribeNoop = () => () => {};
+
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  // The toast host is browser-only UI: it must not exist in the prerendered
+  // markup (hydration must match) and appears once the client takes over.
+  // useSyncExternalStore is the hydration-safe way to render this difference.
+  const mounted = useSyncExternalStore(subscribeNoop, () => true, () => false);
 
   const showToast = useCallback((type: ToastType, message: string) => {
     const id = nextToastId++;
@@ -52,25 +58,27 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     <ToastContext.Provider value={{ showToast }}>
       {children}
       {/* Toast container - fixed top-right, above everything */}
-      <div className="fixed top-4 right-4 z-[10000] flex flex-col gap-2 w-96 max-w-[90vw]">
-        {toasts.map((toast) => (
-          <div
-            key={toast.id}
-            className={`toast-enter flex items-start gap-3 px-4 py-3 rounded-lg shadow-xl text-sm ${styleFor(toast.type)}`}
-          >
-            <span className="shrink-0">{iconFor(toast.type)}</span>
-            <span className="flex-1 break-words whitespace-pre-wrap">
-              {toast.message}
-            </span>
-            <button
-              onClick={() => dismiss(toast.id)}
-              className="shrink-0 opacity-60 hover:opacity-100 text-lg leading-none"
+      {mounted && (
+        <div className="fixed top-4 right-4 z-[10000] flex flex-col gap-2 w-96 max-w-[90vw]">
+          {toasts.map((toast) => (
+            <div
+              key={toast.id}
+              className={`toast-enter flex items-start gap-3 px-4 py-3 rounded-lg shadow-xl text-sm ${styleFor(toast.type)}`}
             >
-              ×
-            </button>
-          </div>
-        ))}
-      </div>
+              <span className="shrink-0">{iconFor(toast.type)}</span>
+              <span className="flex-1 break-words whitespace-pre-wrap">
+                {toast.message}
+              </span>
+              <button
+                onClick={() => dismiss(toast.id)}
+                className="shrink-0 opacity-60 hover:opacity-100 text-lg leading-none"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </ToastContext.Provider>
   );
 }

@@ -1,69 +1,56 @@
 import type { TableInfo } from "../types";
+import type { StoredProject } from "../lib/projectsStore";
+import { ProjectsSection, type ProjectsSectionMode } from "./ProjectsSection";
 
 interface SidebarProps {
+  /** Sidebar width in px (controlled by the draggable resizer). */
+  width?: number;
   tables: TableInfo[];
   /** Total table count before filtering (shown when a filter hides tables). */
   filteredFrom?: number;
   activeTable: string | null;
-  /** Which main section is shown: the table explorer or the ERD diagram. */
-  section: "data" | "diagram";
   onSelectTable: (tableName: string) => void;
   onSelectStructure: (tableName: string) => void;
-  /** Switch between Data and Diagram sections. */
-  onSectionChange: (section: "data" | "diagram") => void;
+
+  // Projects / views section (below the tables list)
+  projects: StoredProject[];
+  projectsMode: ProjectsSectionMode;
+  openProject: StoredProject | null;
+  activeViewId: string | null;
+  onOpenProject: (projectId: string) => void;
+  onCloseProject: () => void;
+  onCreateProject: () => void;
+  onDeleteProject: (projectId: string) => void;
+  onCreateView: () => void;
+  onSelectView: (projectId: string, viewId: string) => void;
+  onDeleteView: (projectId: string, viewId: string) => void;
 }
 
 export function Sidebar({
+  width,
   tables,
   filteredFrom,
   activeTable,
-  section,
   onSelectTable,
   onSelectStructure,
-  onSectionChange,
+  projects,
+  projectsMode,
+  openProject,
+  activeViewId,
+  onOpenProject,
+  onCloseProject,
+  onCreateProject,
+  onDeleteProject,
+  onCreateView,
+  onSelectView,
+  onDeleteView,
 }: SidebarProps) {
   const isFiltered = filteredFrom != null && filteredFrom > tables.length;
   return (
-    <aside className="w-60 shrink-0 bg-gray-900 text-gray-300 flex flex-col border-r border-gray-700 h-full">
-      {/* Data | Diagram section switcher */}
-      <div
-        className="px-3 pt-3 pb-2 border-b border-gray-700"
-        data-testid="sidebar-sections"
-      >
-        <div
-          className="grid grid-cols-2 gap-1 p-1 rounded-md bg-gray-800"
-          role="tablist"
-          aria-label="Sidebar section"
-        >
-          <button
-            role="tab"
-            aria-selected={section === "data"}
-            data-testid="sidebar-section-data"
-            onClick={() => onSectionChange("data")}
-            className={`text-xs py-1.5 rounded transition-colors ${
-              section === "data"
-                ? "bg-gray-700 text-white font-medium"
-                : "text-gray-400 hover:text-gray-200"
-            }`}
-          >
-            Data
-          </button>
-          <button
-            role="tab"
-            aria-selected={section === "diagram"}
-            data-testid="sidebar-section-diagram"
-            onClick={() => onSectionChange("diagram")}
-            className={`text-xs py-1.5 rounded transition-colors ${
-              section === "diagram"
-                ? "bg-gray-700 text-white font-medium"
-                : "text-gray-400 hover:text-gray-200"
-            }`}
-          >
-            Diagram
-          </button>
-        </div>
-      </div>
-
+    <aside
+      style={width != null ? { width } : undefined}
+      className="w-60 shrink-0 bg-gray-900 text-gray-300 flex flex-col border-r border-gray-700 h-full"
+    >
       <div className="px-4 py-3 border-b border-gray-700">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500">
           Tables ({tables.length}
@@ -78,19 +65,14 @@ export function Sidebar({
               w-full text-left px-3 py-2 text-sm transition-colors
               flex items-center justify-between group
               ${
-                section === "data" && activeTable === table.name
+                activeTable === table.name
                   ? "bg-blue-600/20 text-blue-300"
                   : "hover:bg-gray-800 text-gray-400 hover:text-gray-200"
               }
             `}
           >
             <button
-              onClick={() => {
-                // Clicking a table in either section opens its Data tab in the
-                // explorer; the section switch stays as-is so users can return.
-                if (section === "diagram") onSectionChange("data");
-                onSelectTable(table.name);
-              }}
+              onClick={() => onSelectTable(table.name)}
               className="flex items-center gap-2 min-w-0 flex-1 text-left"
             >
               <span className="text-xs opacity-50">📋</span>
@@ -101,10 +83,7 @@ export function Sidebar({
                 {table.rowCount.toLocaleString()}
               </span>
               <button
-                onClick={() => {
-                  if (section === "diagram") onSectionChange("data");
-                  onSelectStructure(table.name);
-                }}
+                onClick={() => onSelectStructure(table.name)}
                 title="Structure"
                 className="text-[10px] opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity px-1 py-0.5 rounded hover:bg-gray-700"
               >
@@ -119,12 +98,20 @@ export function Sidebar({
           </div>
         )}
       </div>
-      {section === "diagram" && (
-        <div className="px-4 py-2.5 border-t border-gray-700 text-[10px] leading-relaxed text-gray-500">
-          ERD of the open database. Click a table on the diagram to open it in
-          the data explorer.
-        </div>
-      )}
+
+      <ProjectsSection
+        projects={projects}
+        mode={projectsMode}
+        openProject={openProject}
+        activeViewId={activeViewId}
+        onOpenProject={onOpenProject}
+        onCloseProject={onCloseProject}
+        onCreateProject={onCreateProject}
+        onDeleteProject={onDeleteProject}
+        onCreateView={onCreateView}
+        onSelectView={onSelectView}
+        onDeleteView={onDeleteView}
+      />
     </aside>
   );
 }

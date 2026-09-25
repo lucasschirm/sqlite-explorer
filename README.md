@@ -1,6 +1,17 @@
 # SQLite Explorer
 
-A fully offline, browser-based SQLite database explorer. Drop a `.sqlite`/`.db` file and browse tables, run custom SQL, inspect schema, and view individual records — nothing is uploaded.
+(`sqlitexp`, browser-based SQLite database explorer. Drop a `.sqlite`/`.db` file and browse tables, run custom SQL, inspect schema, and view individual records — nothing is uploaded.
+
+Also available as a CLI: `sqlitexp mydata.db` opens any local database in the viewer straight from your terminal, no drop zone required.
+
+## Installation (CLI)
+
+```sh
+npm install @lucasschirm/sqlite-explorer -g
+sqlitexp mydata.db                    # serves the viewer at http://localhost:3000 and opens it
+sqlitexp mydata.db --port 8080        # custom port
+sqlitexp mydata.db --no-open          # don't launch the browser automatically
+```
 
 Built with React + Vite + Tailwind CSS + wa-sqlite (WebAssembly SQLite) + @tanstack/react-virtual.
 
@@ -9,6 +20,7 @@ Built with React + Vite + Tailwind CSS + wa-sqlite (WebAssembly SQLite) + @tanst
 - **Drop anywhere** — drag a SQLite file onto the window, or click to browse
 - **Multi-gigabyte files** — databases of any size open instantly; pages stream from disk on demand and the whole file is never loaded into memory
 - **Demo database** — "Load demo database" button loads a bundled sample DB (3 tables with customers, products, orders)
+- **Database handover from other sites** — a host page can push an in-memory SQLite database straight into the explorer with one `postMessage` (see [Database handover](#database-handover-from-another-site-postmessage))
 - **Tables sidebar** — row counts per table, click to open a Data tab, hover for the Structure shortcut
 - **Data tab** — Monaco SQL editor (defaults to `SELECT * FROM <table> LIMIT 100`) with schema-aware autocomplete (tables, `table.` → columns), SQL formatting (button or Shift+Alt+F), Run button or Ctrl/Cmd+Enter, virtualized read-only grid
 - **Structure tab** — columns grid (name, type, notnull, default, pk) and indexes grid (name, unique, origin, columns)
@@ -16,7 +28,57 @@ Built with React + Vite + Tailwind CSS + wa-sqlite (WebAssembly SQLite) + @tanst
 - **Record tab** — double-click any row to open a form view with type-aware read-only fields
 - **Feedback everywhere** — busy overlays for actions, toast notifications, `console.error` for failures
 - **WebMCP agent tools** — `list_tables`, `view_table` and `select_table` are exposed via `document.modelContext` (WebMCP polyfill), so AI agents can browse the database and drive the UI
-- **Docs & About pages** — in-app documentation (`#/docs`) with real screenshots of every feature, and an About page (`#/about`) covering privacy and architecture; both linked from the app header
+- **Docs & About pages** — in-app documentation (`/docs`) with real screenshots of every feature, and an About page (`/about`) covering privacy and architecture; both linked from the app header and prerendered to static HTML at build time
+
+## Database handover from another site (postMessage)
+
+Another site can hand a database it holds **in memory** (or in any browser storage — an IndexedDB blob, a `fetch()` in flight, an in-browser WASM SQLite export) straight to the explorer. The database travels as a `Blob`, is transferred by reference (zero copy, multi-GB friendly), and the explorer opens it exactly like a dropped file.
+
+The sender embeds the explorer in an iframe or popup and posts one message:
+
+```js
+const EXPLORER_ORIGIN = "https://<your-explorer-host>"; // exact origin, never "*"
+
+const iframe = document.createElement("iframe");
+iframe.src = `${EXPLORER_ORIGIN}/`;
+await new Promise((resolve) => iframe.addEventListener("load", resolve, { once: true }));
+document.body.appendChild(iframe);
+
+iframe.contentWindow.postMessage(
+  { type: "sqlite-explorer:handover", name: "report.sqlite", blob: dbBlob },
+  EXPLORER_ORIGIN
+);
+```
+
+The explorer validates the message (exact sender origin, shape, and the 16-byte SQLite file header) and replies on the same channel:
+
+- `sqlite-explorer:handover:ack` — the database is open in the explorer UI
+- `sqlite-explorer:handover:nack` with a `reason` — rejected (unknown origin, wrong shape, or not a SQLite file)
+
+By default only the explorer's own origin may hand over databases. To allow partner sites, list them in the `handoverOrigins` query parameter when loading the explorer (full URLs or bare origins, comma-separated):
+
+```
+https://explorer.example/?handoverOrigins=https://partner.example,https://other.example
+```
+
+A complete runnable sender — it builds a SQLite database in memory with sql.js, embeds the explorer, performs the handshake and prints the reply — lives in [`examples/sqlite-handover`](examples/sqlite-handover). Try it locally:
+
+```sh
+bun run dev                                  # explorer at http://localhost:5173
+# then serve the example and open it, e.g.:
+npx serve examples/sqlite-handover           # http://localhost:3000
+```
+
+## CLI: `sqlitexp <file>`
+
+The command starts a small local Fastify server (bound to `127.0.0.1`) that serves the prebuilt viewer (`local.html`) and streams the database over HTTP Range requests. The UI's SQLite worker fetches only the 4 KiB pages a query touches — exactly like the drop-zone path, multi-gigabyte files open instantly and are never loaded into memory. Nothing leaves your machine; stop with `Ctrl+C`.
+
+Local development of the CLI:
+
+```sh
+bun run build   # builds the UI (dist/) and compiles the CLI (cli/)
+bun run cli -- public/demo.db --port 4545
+```
 
 ## Development
 
@@ -26,9 +88,21 @@ bun run demo:db     # generate public/demo.db (optional — used by the demo but
 bun run dev         # start dev server
 ```
 
+The site entry (`index.html`) is the public drop-zone app. The CLI entry (`local.html`) is the same app in `cliMode`: it auto-opens the database exposed by the sqlitexp server via `/api/boot` and renders the explorer directly.
+
+## Static-site generation
+
+The docs are a **multi-page site**: `/docs` (overview), `/docs/:slug` (section page) and `/docs/:parent/:child` (sub-page), all prerendered to static HTML at build time alongside `/about` — crawlers and no-JS visitors get real content instead of an empty `<div id="root">`:
+
+- `src/docs/registry.tsx` is the single source of truth for the docs tree (sections, sub-pages, content); the sidebar, overview cards and SSG routes all derive from it.
+- `src/prerender.tsx` renders each route with `renderToStaticMarkup` (Node-side only; per-route titles/descriptions).
+- `scripts/prerender.mjs` runs automatically after `vite build` (see the `build` script): it bundles the entry with an SSR build, injects the markup into the template's `#root`, and writes one `index.html` per route (`dist/index.html`, `dist/docs/index.html`, `dist/docs/<slug>/index.html`, `dist/docs/<parent>/<child>/index.html`, `dist/about/index.html`).
+- `src/main.tsx` hydrates the prerendered markup on the client, and redirects the legacy hash URLs (`#/docs`, `#/docs?<anchor>`, `#/about`) to their new clean paths.
+- `firebase.json` rewrites `/docs/**` and `/about` to their static files (and everything else to the app shell).
+
 ## Docs page screenshots
 
-The `#/docs` page embeds real screenshots under `public/screenshots/`, captured from the running app with Playwright. To regenerate them after a UI change:
+The `/docs` page embeds real screenshots under `public/screenshots/`, captured from the running app with Playwright. To regenerate them after a UI change:
 
 ```sh
 bun run build && (bun run preview &) && node scripts/capture-screenshots.mjs
@@ -50,20 +124,11 @@ The e2e suite loads the demo database and verifies: table listing, custom SQL qu
 
 ## CI / CD
 
-Two GitHub Actions workflows are included:
+GitHub Actions workflows are included:
 
 - **`.github/workflows/ci.yml`** — on push/PR to `main`: typecheck, build, then Playwright e2e tests with browser installation.
-- **`.github/workflows/deploy-pages.yml`** — on push to `main` (or manual dispatch): builds with `VITE_BASE=/<repo-name>/` and deploys to GitHub Pages.
-
-### Enabling GitHub Pages
-
-1. Push the repository to GitHub.
-2. In the repo settings, go to **Pages** and set **Source** to **GitHub Actions**.
-3. The deploy workflow will publish on the next push to `main` (or run it manually from the Actions tab).
-
-## Building for a subpath
-
-GitHub Pages serves projects under `/<repo-name>/`. The deploy workflow handles this via the `VITE_BASE` environment variable, which configures Vite's `base`. For other subpath deployments, set `VITE_BASE` before running `bun run build`.
+- **`.github/workflows/firebase-hosting-pull-request.yml`** — on PR: builds and deploys a preview channel to Firebase Hosting.
+- **`.github/workflows/firebase-hosting-merge.yml`** — on push to `main`: builds and deploys live to Firebase Hosting.
 
 ## WebMCP tools
 
@@ -81,7 +146,7 @@ All tools are read-only. Errors are returned as the raw SQLite error text (e.g. 
 
 The Monaco editor offers Copilot-style ghost-text SQL completions powered by **Qwen2.5-Coder-1.5B** running fully in-browser via [WebLLM](https://github.com/mlc-ai/web-llm) — no server, no Hugging Face calls at runtime.
 
-- **Model hosting**: weights are fetched with `bun run model:fetch` into `public/models/qwen25-coder-1.5b/` (gitignored, ~845 MB) and served from the app's own origin. WebLLM's `cleanModelUrl()` appends `resolve/main/` unless the URL already has it, so the directory **must** mirror the HuggingFace layout: `public/models/qwen25-coder-1.5b/resolve/main/`.
+- **Model hosting**: weights are fetched with `bun run model:fetch` into `public/models/qwen25-coder-1.5b/` (gitignored, ~845 MB) and served from the dedicated CDN Firebase site (`cdn-b89da`, https://cdn.lucasschirm.com). The CDN is deployed by CI only when `scripts/fetch-model.mjs` changes. WebLLM's `cleanModelUrl()` appends `resolve/main/` unless the URL already has it, so the CDN directory **must** mirror the HuggingFace layout: `qwen25-coder-1.5b/resolve/main/`.
 - **Inference worker**: `src/worker/aiWorker.ts` hosts the MLCEngine so downloads, GPU init and generation never touch the UI thread. The model is preloaded at app boot (fire-and-forget, browser-cached across visits).
 - **Graceful degradation**: the status pill in the header shows loading progress; on machines without WebGPU (or any init failure) AI silently stays dormant — the app never blocks or breaks. Verify the pipeline with `node scripts/check-ai-pipeline.mjs` against a running preview (on a WebGPU machine it confirms the model reaches `ready`).
 

@@ -1,0 +1,57 @@
+name: Publish to npm
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # OIDC — required for npm trusted publishing. No npm token is stored in
+  # GitHub; npm exchanges this short-lived OIDC token for a publish grant.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Must match the "Environment" configured for the trusted publisher
+    # on npmjs.com (Package settings → Trusted publisher).
+    environment: npm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # npm >= 11.5.1 is required for trusted publishing (OIDC) support.
+      - name: Upgrade npm
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          node -e "
+            const p = require('./package.json');
+            const tag = process.env.GITHUB_REF_NAME;
+            if ('v' + p.version !== tag) {
+              console.error('Tag ' + tag + ' does not match package.json version v' + p.version + '. Bump the version first.');
+              process.exit(1);
+            }
+          "
+
+      - name: Build (dist/ + cli/)
+        run: bun run build
+
+      - name: Show package contents
+        run: npm pack --dry-run
+
+      - name: Publish
+        run: npm publish

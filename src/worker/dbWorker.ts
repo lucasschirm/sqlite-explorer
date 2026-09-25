@@ -4,6 +4,7 @@
 //
 // Protocol (request → response):
 //   {type:'open',   id, blob, name}  → {type:'open:ok',  id, tables} | {type:'error', id, message}
+//   {type:'open-remote', id, url, name} → same response shape as 'open'
 //   {type:'query',  id, sql}         → {type:'query:ok', id, result} | {type:'error', id, message}
 //   {type:'close',  id}              → {type:'close:ok', id}
 // Progress (unsolicited):
@@ -21,9 +22,10 @@ let sqlite3: ReturnType<typeof Factory> | null = null;
 let db: number | null = null;
 
 interface OpenRequest { type: "open"; id: number; blob: Blob; name: string }
+interface OpenRemoteRequest { type: "open-remote"; id: number; url: string; name: string }
 interface QueryRequest { type: "query"; id: number; sql: string; params?: CellValue[] }
 interface CloseRequest { type: "close"; id: number }
-type Request = OpenRequest | QueryRequest | CloseRequest;
+type Request = OpenRequest | OpenRemoteRequest | QueryRequest | CloseRequest;
 
 function post(msg: Record<string, unknown>): void {
   (self as unknown as Worker).postMessage(msg);
@@ -123,7 +125,8 @@ function handle(request: Request): Promise<void> {
   return queue.then(async () => {
     try {
       switch (request.type) {
-        case "open": {
+        case "open":
+        case "open-remote": {
           await ensureEngine();
           if (db != null) {
             try {
@@ -134,7 +137,11 @@ function handle(request: Request): Promise<void> {
             db = null;
           }
           VFS.clearBlobs();
-          VFS.registerBlob("/user.db", request.blob);
+          if (request.type === "open") {
+            VFS.registerBlob("/user.db", request.blob);
+          } else {
+            VFS.registerRemote("/user.db", request.url);
+          }
           post({ type: "progress", stage: "open", detail: `Opening ${request.name}` });
           db = await sqlite3!.open_v2("/user.db", 0x00000001 /* SQLITE_OPEN_READONLY */, VFS.name);
           const tables = await listTables();

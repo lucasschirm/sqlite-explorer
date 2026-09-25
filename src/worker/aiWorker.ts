@@ -2,15 +2,17 @@
 // and generation never touch the UI thread. The engine is created lazily on
 // the first "init" message and reuses the browser cache across reloads.
 //
-// The model is served from this app's own origin (public/models/...) —
-// never HuggingFace — via a custom AppConfig model record.
+// The model is served from the dedicated CDN Firebase site (cdn-b89da,
+// https://cdn.lucasschirm.com) — never HuggingFace — via a custom AppConfig
+// model record. The weights are deployed there only when
+// scripts/fetch-model.mjs changes (see firebase-hosting-cdn-merge.yml).
 import * as webllm from "@mlc-ai/web-llm";
 
 // Must match scripts/fetch-model.mjs.
 const MODEL_ID = "Qwen2.5-Coder-1.5B-Instruct-q4f16_1-MLC-local";
 // WebLLM's cleanModelUrl() appends `resolve/main/` unless the URL already has
-// it (HuggingFace layout) — self-hosted model dirs must mirror that structure.
-const MODEL_DIR = "models/qwen25-coder-1.5b/resolve/main";
+// it (HuggingFace layout) — the CDN model dir mirrors that structure.
+const MODEL_DIR = "https://cdn.lucasschirm.com/qwen25-coder-1.5b/resolve/main";
 const MODEL_LIB = "Qwen2-1.5B-Instruct-q4f16_1_cs1k-webgpu.wasm";
 
 const appConfig: webllm.AppConfig = {
@@ -35,11 +37,29 @@ function withBase(path: string, baseUrl: string): string {
   return new URL(path.replace(/^\//, ""), base).href;
 }
 
+// The model weights live on the CDN site (cdn.lucasschirm.com) — deployed by
+// CI only when scripts/fetch-model.mjs changes — so until that first deploy
+// they are not served. WebLLM's first request is mlc-chat-config.json; when
+// it 404s (or CORS-blocks), the probe below catches it and we degrade to a
+// clean "unsupported" state instead of an unhelpful JSON.parse SyntaxError.
+class MissingModelFilesError extends Error {
+  constructor() {
+    super("AI model files not available on the CDN yet (deploy via scripts/fetch-model.mjs change)");
+    this.name = "MissingModelFilesError";
+  }
+}
+
+async function assertModelFilesAvailable(baseUrl: string): Promise<void> {
+  const res = await fetch(withBase(`${MODEL_DIR}/mlc-chat-config.json`, baseUrl));
+  if (!res.ok) throw new MissingModelFilesError();
+}
+
 let engine: webllm.MLCEngine | null = null;
 let initPromise: Promise<void> | null = null;
 
 async function ensureEngine(baseUrl: string): Promise<webllm.MLCEngine> {
   if (engine) return engine;
+  await assertModelFilesAvailable(baseUrl);
   const cfg: webllm.AppConfig = {
     model_list: [
       {
@@ -65,10 +85,11 @@ async function init(baseUrl: string): Promise<void> {
     })
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
-      // No compatible GPU adapter = this device can never run the model;
-      // surface it as a permanent "unsupported" rather than a transient error.
-      if (/compatible gpu|webgpu/i.test(message)) {
-        console.warn("aiWorker: WebGPU unavailable:", message);
+      // Permanent "can never run here" conditions surface as "unsupported"
+      // (the status pill disappears) rather than a transient error: no
+      // compatible GPU adapter, or the gitignored model files are not served.
+      if (err instanceof MissingModelFilesError || /compatible gpu|webgpu/i.test(message)) {
+        console.warn("aiWorker: AI features unavailable:", message);
         self.postMessage({ type: "unsupported", message });
       } else {
         console.error("aiWorker: engine init failed:", err);

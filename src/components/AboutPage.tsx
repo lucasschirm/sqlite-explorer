@@ -51,8 +51,8 @@ export function AboutPage() {
         </li>
         <li>
           <strong>WebLLM + Qwen2.5-Coder-1.5B</strong> power optional ghost-text completions,
-          running on your GPU via WebGPU. The model is served from this site and cached by your
-          browser; on machines without WebGPU it simply stays off.
+          running on your GPU via WebGPU. The model is served from a dedicated CDN (cdn.lucasschirm.com)
+          and cached by your browser; on machines without WebGPU it simply stays off.
         </li>
       </ul>
 

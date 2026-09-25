@@ -165,6 +165,22 @@ test.describe("SQLite Explorer", () => {
     await expect(rows.filter({ hasText: "email" }).first()).toBeVisible();
     await page.keyboard.press("Escape");
 
+    // The same dot flow works without quotes and case-insensitively —
+    // bare `CUSTOMERS.` resolves against the schema catalog.
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.insertText("SELECT * FROM CUSTOMERS.");
+    await page.keyboard.press("ControlOrMeta+Space");
+    await expect(suggest).toBeVisible();
+    await expect(rows.filter({ hasText: "email" }).first()).toBeVisible();
+
+    // ...and through a table alias declared in FROM/JOIN.
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.insertText("SELECT * FROM customers AS c WHERE c.");
+    await page.keyboard.press("ControlOrMeta+Space");
+    await expect(suggest).toBeVisible();
+    await expect(rows.filter({ hasText: "email" }).first()).toBeVisible();
+    await page.keyboard.press("Escape");
+
     // Format rewrites messy SQL (sql-formatter, sqlite dialect)
     await editor.click();
     await page.keyboard.press("ControlOrMeta+a");
@@ -172,6 +188,38 @@ test.describe("SQLite Explorer", () => {
     await page.getByRole("button", { name: "Format" }).click();
     await expect(editor.getByText("GROUP BY")).toBeVisible();
     await expect(editor.getByText("COUNT(*) AS n")).toBeVisible();
+  });
+
+  test("reflects the current selection in the /explorer URL", async ({ page }) => {
+    await page.goto("/");
+    await page.getByTestId("load-demo").click();
+    const sidebar = page.locator("aside, .w-60").first();
+    await sidebar.getByText("customers").waitFor({ timeout: 15_000 });
+
+    // Opening a database moves to /explorer (no params yet).
+    await expect(page).toHaveURL(/\/explorer$/);
+
+    // Clicking a table selects it via ?table=.
+    await sidebar.getByText("customers").click();
+    await expect(page).toHaveURL(/\/explorer\?table=customers$/);
+
+    // Switching to another table's tab updates the param.
+    await sidebar.getByText("orders").click();
+    await expect(page).toHaveURL(/\/explorer\?table=orders$/);
+
+    // A tab unrelated to a table or view (an agent-opened SQL tab) is
+    // addressed by its position in the tab strip.
+    await page.evaluate(() => {
+      const testing = (
+        navigator as Navigator & {
+          modelContextTesting?: { executeTool: (n: string, json: string) => Promise<string | null> };
+        }
+      ).modelContextTesting;
+      if (!testing) throw new Error("modelContextTesting shim unavailable");
+      return testing.executeTool("select_table", '{"sql":"SELECT id FROM customers"}');
+    });
+    await page.getByText("SQL 1").click();
+    await expect(page).toHaveURL(/\/explorer\?tab=2$/);
   });
 
   test("opens a WAL-journal-mode database file", async ({ page }) => {
