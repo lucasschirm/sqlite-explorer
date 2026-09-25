@@ -67,8 +67,22 @@ export function AboutPage() {
         >
           github.com/lucasschirm/sqlite-explorer
         </a>
-        .
+        , and the app stands on the shoulders of these open-source projects:
       </p>
+      <ul className="mt-3 list-disc pl-5 text-sm leading-relaxed text-gray-700 space-y-1">
+        <li>
+          <a
+            href="https://github.com/jurerotar/sqlite-erd"
+            className="text-blue-600 hover:underline"
+            target="_blank"
+            rel="noreferrer"
+          >
+            sqlite-erd
+          </a>{" "}
+          — interactive Entity-Relationship Diagrams for SQLite, powering the
+          Diagram view (/visualize).
+        </li>
+      </ul>
     </div>
   );
 }

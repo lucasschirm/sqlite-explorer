@@ -55,6 +55,11 @@ const OVERVIEW_LINKS: { href: string; title: string; description: string }[] = [
     description: "Run, format and autocomplete queries with schema-aware suggestions.",
   },
   {
+    href: "/docs/erd-diagram",
+    title: "Diagram (ERD)",
+    description: "Render the open database as an interactive Entity-Relationship Diagram.",
+  },
+  {
     href: "/docs/cli",
     title: "CLI (sqlitexp)",
     description: "Open local databases from your terminal with the sqlitexp command.",
@@ -252,6 +257,53 @@ export const DOC_SECTIONS: DocSection[] = [
             pill simply disappears and autocomplete falls back to the schema-aware suggestions
             above. The model (~845 MB) is fetched once and cached by the browser; the fetch script
             is <Code>bun run model:fetch</Code>.
+          </p>
+        </Section>
+      </>
+    ),
+  },
+
+  // -------------------------------------------------- erd diagram page
+  {
+    slug: "erd-diagram",
+    title: "Diagram (ERD)",
+    description: "Visualize tables and their relationships as an interactive diagram.",
+    render: () => (
+      <>
+        <Section title="The Diagram view">
+          <p>
+            The sidebar's <strong>Data | Diagram</strong> switcher opens the database's
+            Entity-Relationship Diagram: one card per table, its columns with key and type
+            badges, and an edge for every foreign-key relationship. Click a node to jump back
+            to that table's Data tab in the explorer; the left sidebar stays available for
+            direct navigation. Diagrams are generated from the open database's schema and
+            never leave your machine.
+          </p>
+          <p>
+            The diagram is rendered by the open-source{" "}
+            <a
+              href="https://github.com/jurerotar/sqlite-erd"
+              className="text-blue-600 hover:underline"
+              target="_blank"
+              rel="noreferrer"
+            >
+              sqlite-erd
+            </a>{" "}
+            package. You can also deep-link to <Code>/visualize</Code> — with no database open
+            it shows a short explanation instead of an empty canvas.
+          </p>
+          <p>
+            <strong>Views and virtual tables</strong> are listed in the sidebar but do not
+            render as diagram cards — the diagram engine parses <Code>CREATE TABLE</Code> and
+            <Code>CREATE INDEX</Code> statements only.
+          </p>
+        </Section>
+        <Section title="Pan, zoom and arrange">
+          <p>
+            Drag the canvas to pan, scroll or pinch to zoom, and drag node cards to arrange
+            them — the layout is fully interactive. <Kbd>Ctrl</Kbd>/<Kbd>⌘</Kbd> + scroll
+            zooms in place, and the on-canvas controls (bottom-left) fit the view, zoom in or
+            out, and lock interactive mode.
           </p>
         </Section>
       </>
